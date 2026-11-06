@@ -50,6 +50,7 @@ from .const import (
     ATTR_TYPE_CAMERA,
     ATTR_TYPE_CLOUD,
     CONF_CODE,
+    CONF_AUTO_SNAPSHOT,
     CONF_CODES,
     CONF_FFMPEG_ARGUMENTS,
     CONF_LINGER,
@@ -58,11 +59,14 @@ from .const import (
     CONF_RFSESSION_ID,
     CONF_SERIAL,
     CONF_SESSION_ID,
+    CONF_SNAPSHOT_INTERVAL,
     CONF_STREAM_ENABLED,
     CONF_STREAM_TOKEN,
     CONF_TRANSCODE,
+    DEFAULT_AUTO_SNAPSHOT,
     DEFAULT_CAMERA_USERNAME,
     DEFAULT_FFMPEG_ARGUMENTS,
+    DEFAULT_SNAPSHOT_INTERVAL,
     DEFAULT_TIMEOUT,
     DOMAIN,
     EU_URL,
@@ -493,6 +497,7 @@ class EzvizOptionsFlowHandler(OptionsFlowWithReload):
                 "general",
                 "stream",
                 "release",
+                "snapshots",
                 "stream_address",
                 "video",
                 "codes",
@@ -658,6 +663,50 @@ class EzvizOptionsFlowHandler(OptionsFlowWithReload):
                             unit_of_measurement="s",
                         )
                     )
+                }
+            ),
+        )
+
+    async def async_step_snapshots(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Automatic snapshots: whether the snapshot card may take a picture when
+        it comes into view, and how often per camera at most.
+
+        Explicit capture_picture calls (a button, a script) are not affected.
+        """
+        options = self.config_entry.options
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    **options,
+                    CONF_AUTO_SNAPSHOT: bool(user_input[CONF_AUTO_SNAPSHOT]),
+                    CONF_SNAPSHOT_INTERVAL: int(user_input[CONF_SNAPSHOT_INTERVAL]),
+                },
+            )
+        return self.async_show_form(
+            step_id="snapshots",
+            data_schema=probatio.Schema(
+                {
+                    probatio.Optional(
+                        CONF_AUTO_SNAPSHOT,
+                        default=options.get(CONF_AUTO_SNAPSHOT, DEFAULT_AUTO_SNAPSHOT),
+                    ): BooleanSelector(),
+                    probatio.Optional(
+                        CONF_SNAPSHOT_INTERVAL,
+                        default=options.get(
+                            CONF_SNAPSHOT_INTERVAL, DEFAULT_SNAPSHOT_INTERVAL
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0,
+                            max=86400,
+                            step=30,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="s",
+                        )
+                    ),
                 }
             ),
         )

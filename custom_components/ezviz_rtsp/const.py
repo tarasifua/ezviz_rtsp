@@ -20,6 +20,8 @@ CONF_CODE = "code"
 CONF_TRANSCODE = "transcode"  # re-encode the live stream to H.264 for the browser
 CONF_MAX_SESSION = "max_session"  # cap a battery camera's stream, in seconds
 CONF_LINGER = "linger"  # how long the stream is held open after the last viewer
+CONF_AUTO_SNAPSHOT = "auto_snapshot"  # honour the snapshot card's automatic capture requests
+CONF_SNAPSHOT_INTERVAL = "snapshot_interval"  # minimum seconds between automatic captures of one camera
 CONF_STREAM_TOKEN = "stream_token"  # guards the live address other apps read
 CONF_STREAM_ENABLED = "stream_enabled"  # whether other apps may read those addresses
 CONF_INTERNAL_TOKEN = "internal_token"  # guards the card's own picture address
@@ -46,12 +48,15 @@ ATTR_SPEED = "speed"
 ATTR_LEVEL = "level"
 ATTR_TYPE = "type_value"
 ATTR_MIN_INTERVAL = "min_interval"
+ATTR_AUTOMATIC = "automatic"
 
 # Service names
 SERVICE_WAKE_DEVICE = "wake_device"
 # Take a picture through the cloud on demand (shown by the camera's Snapshot image)
 SERVICE_CAPTURE_PICTURE = "capture_picture"
 SIGNAL_PICTURE_CAPTURED = "ezviz_rtsp_picture_captured_{}"
+DEFAULT_AUTO_SNAPSHOT = True
+DEFAULT_SNAPSHOT_INTERVAL = 300
 SERVICE_DETECTION_SENSITIVITY = "set_alarm_detection_sensibility"
 
 # Defaults

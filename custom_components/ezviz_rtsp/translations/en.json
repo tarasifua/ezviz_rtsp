@@ -201,6 +201,7 @@
           "stream": "Maximum stream duration",
           "video": "Video transcoding",
           "release": "Release the camera after",
+          "snapshots": "Snapshots",
           "stream_address": "Stream address for other apps"
         }
       },
@@ -236,6 +237,18 @@
         },
         "description": "Cloud cameras (battery cameras and peepholes) send HEVC (H.265), which many browsers can't play. Re-encoding to H.264 makes the live view play everywhere.",
         "title": "Video transcoding"
+      },
+      "snapshots": {
+        "data": {
+          "auto_snapshot": "Take a snapshot when a dashboard shows the camera",
+          "snapshot_interval": "Minimum time between automatic snapshots"
+        },
+        "data_description": {
+          "auto_snapshot": "Lets the EZVIZ Snapshot card take a new picture each time it comes into view (dashboard opened, tab or app back in front). Each picture wakes a battery camera. Buttons and scripts that call capture_picture are not affected.",
+          "snapshot_interval": "An automatic snapshot of a camera is skipped if it took a picture less than this long ago, in seconds, however many dashboards ask. 0 takes one on every view."
+        },
+        "description": "Automatic snapshots from the EZVIZ Snapshot card. A camera is woken for each picture, so keep the interval long enough for battery cameras.",
+        "title": "Snapshots"
       },
       "stream": {
         "data": {
@@ -275,6 +288,10 @@
     "capture_picture": {
       "description": "Takes a new picture through the EZVIZ cloud and shows it in the camera's Snapshot image entity. Wakes battery cameras.",
       "fields": {
+        "automatic": {
+          "description": "Marks an automatic request (the snapshot card coming into view). It is skipped when automatic snapshots are off under Configure → Snapshots, and uses the minimum time set there unless a minimum interval is given.",
+          "name": "Automatic"
+        },
         "min_interval": {
           "description": "Skip the capture if this camera took a picture less than this many seconds ago (0 = always capture). Lets dashboards ask for a picture on every visit without waking the camera each time.",
           "name": "Minimum interval"

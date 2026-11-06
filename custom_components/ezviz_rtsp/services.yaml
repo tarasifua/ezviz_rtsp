@@ -4,10 +4,14 @@ capture_picture:
       integration: ezviz_rtsp
       domain: camera
   fields:
+    automatic:
+      required: false
+      default: false
+      selector:
+        boolean:
     min_interval:
       required: false
       example: 300
-      default: 0
       selector:
         number:
           min: 0

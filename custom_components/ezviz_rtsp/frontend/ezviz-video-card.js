@@ -853,14 +853,16 @@ class EzvizVideoCardEditor extends HTMLElement {
 //   image: image.front_snap  # optional; found from the camera's device when left out
 //   title: Front door        # optional; defaults to the camera's name
 //   capture_on_load: true    # optional; take a new picture when the card comes into view
-//   min_interval: 300        # optional; seconds — skip if this camera took one more recently
+//   min_interval: 600        # optional; seconds — overrides the integration's Snapshots setting
 //
 // Shows the camera's Snapshot image (the picture taken by capture_picture). With
 // capture_on_load, it calls capture_picture each time the card comes into view:
 // the dashboard view opens, the browser tab returns, the app comes back to the
-// front. min_interval is passed to the service, which keeps the throttle per
-// camera on the server, so several open dashboards still wake a camera only once
-// per interval. Tapping the picture opens the image's more-info dialog.
+// front. The call is marked automatic, so it follows the integration's
+// Configure → Snapshots options: it is skipped when automatic snapshots are off,
+// and the server keeps the minimum time between pictures per camera (min_interval
+// in the card overrides it), so several open dashboards still wake a camera only
+// once per interval. Tapping the picture opens the image's more-info dialog.
 
 const SNAPSHOT_RETRY_SECONDS = 5; // a sleeping camera can answer the first call with EZVIZ 2009
 
@@ -888,14 +890,14 @@ class EzvizSnapshotCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { entity: "", capture_on_load: true, min_interval: 300 };
+    return { entity: "", capture_on_load: true };
   }
 
   setConfig(config) {
     if (!config || !config.entity || !String(config.entity).startsWith("camera.")) {
       throw new Error("ezviz-snapshot-card: 'entity' (a camera.* entity) is required");
     }
-    this._config = { capture_on_load: true, min_interval: 300, ...config };
+    this._config = { capture_on_load: true, ...config };
     this._render();
   }
 
@@ -967,6 +969,13 @@ class EzvizSnapshotCard extends HTMLElement {
     if (visible && this._config.capture_on_load) this._capture(true);
   }
 
+  _serviceData() {
+    const data = { automatic: true };
+    const own = this._config.min_interval;
+    if (own !== undefined && own !== null && own !== "") data.min_interval = Number(own) || 0;
+    return data;
+  }
+
   async _capture(retry) {
     if (this._capturing || !this._hass) return;
     const cam = this._hass.states[this._config.entity];
@@ -977,7 +986,7 @@ class EzvizSnapshotCard extends HTMLElement {
       await this._hass.callService(
         "ezviz_rtsp",
         "capture_picture",
-        { min_interval: Number(this._config.min_interval) || 0 },
+        this._serviceData(),
         { entity_id: this._config.entity }
       );
     } catch (err) {

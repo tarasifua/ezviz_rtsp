@@ -26,13 +26,18 @@ from pyezvizapi.exceptions import HTTPError, InvalidHost, PyEzvizError
 from pyezvizapi.utils import decrypt_image
 
 from .const import (
+    ATTR_AUTOMATIC,
     ATTR_LEVEL,
     ATTR_MIN_INTERVAL,
     ATTR_SERIAL,
     ATTR_TYPE,
+    CONF_AUTO_SNAPSHOT,
     CONF_FFMPEG_ARGUMENTS,
+    CONF_SNAPSHOT_INTERVAL,
+    DEFAULT_AUTO_SNAPSHOT,
     DEFAULT_CAMERA_USERNAME,
     DEFAULT_FFMPEG_ARGUMENTS,
+    DEFAULT_SNAPSHOT_INTERVAL,
     DOMAIN,
     SERVICE_CAPTURE_PICTURE,
     SERVICE_DETECTION_SENSITIVITY,
@@ -140,7 +145,10 @@ async def async_setup_entry(
     )
     platform.async_register_entity_service(
         SERVICE_CAPTURE_PICTURE,
-        {vol.Optional(ATTR_MIN_INTERVAL, default=0): cv.positive_int},
+        {
+            vol.Optional(ATTR_MIN_INTERVAL): cv.positive_int,
+            vol.Optional(ATTR_AUTOMATIC, default=False): cv.boolean,
+        },
         "async_capture_picture",
         supports_response=SupportsResponse.OPTIONAL,
     )
@@ -322,7 +330,9 @@ class EzvizCamera(EzvizEntity, Camera):
         except (HTTPError, PyEzvizError) as err:
             raise PyEzvizError("Cannot wake device") from err
 
-    async def async_capture_picture(self, min_interval: int = 0) -> ServiceResponse:
+    async def async_capture_picture(
+        self, min_interval: int | None = None, automatic: bool = False
+    ) -> ServiceResponse:
         """Take a new picture through the EZVIZ cloud.
 
         Works without RTSP and wakes battery cameras from standby. The picture is
@@ -332,7 +342,21 @@ class EzvizCamera(EzvizEntity, Camera):
         capture of this camera (or while one is running) is skipped, so several
         dashboards opening at once wake the camera only once. The skipped call
         returns the last picture with ``skipped: true``.
+
+        ``automatic`` marks a request nobody explicitly asked for (the snapshot
+        card coming into view). It follows the entry's Snapshots options: it is
+        skipped when automatic snapshots are off, and without its own
+        ``min_interval`` it uses the configured one.
         """
+        if automatic:
+            options = self.coordinator.config_entry.options
+            if not options.get(CONF_AUTO_SNAPSHOT, DEFAULT_AUTO_SNAPSHOT):
+                return {"picture_url": self._capture_url, "skipped": True}
+            if min_interval is None:
+                min_interval = int(
+                    options.get(CONF_SNAPSHOT_INTERVAL, DEFAULT_SNAPSHOT_INTERVAL)
+                )
+        min_interval = min_interval or 0
         now = time.monotonic()
         if (
             min_interval

@@ -207,6 +207,33 @@ empty again after a restart until the next capture. If a sleeping camera answers
 with EZVIZ error 2009 ("device network exception"), it was slow to wake: try
 again a few seconds later.
 
+Pass `min_interval: <seconds>` to skip the capture when that camera took a
+picture more recently (the call then returns the last picture with
+`skipped: true`). The throttle is kept per camera in Home Assistant, so it holds
+however many dashboards or automations ask.
+
+### A snapshot whenever the dashboard is opened
+
+The integration also ships an **EZVIZ Snapshot** card:
+
+```yaml
+type: custom:ezviz-snapshot-card
+entity: camera.driveway_gate
+title: Driveway gate      # optional
+capture_on_load: true     # optional; take a picture when the card comes into view
+```
+
+It shows the camera's Snapshot image and, with `capture_on_load`, asks for a new
+picture each time it comes into view: the dashboard view opens, or the browser
+tab or app comes back to the front. These automatic requests follow
+**Configure → Snapshots**:
+
+- **Take a snapshot when a dashboard shows the camera** — on by default; turn it
+  off and the cards only show the last picture (buttons and scripts calling
+  `capture_picture` still work).
+- **Minimum time between automatic snapshots** — 300 s by default, per camera,
+  however many dashboards ask. A card can override it with `min_interval`.
+
 ---
 
 ## Feeding other apps (Frigate, go2rtc, …)
