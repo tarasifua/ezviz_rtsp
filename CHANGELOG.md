@@ -3,6 +3,15 @@
 All notable changes to **Ezviz Cloud with Video** (`ezviz_rtsp`) are listed here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`ezviz_rtsp.capture_picture`** camera service: the cloud wakes the camera
+  and it takes a new full-resolution picture, shown by a new per-camera
+  **Snapshot** image entity (`image.<camera>_snapshot`); the service can return
+  the `picture_url`. Gives battery cameras a current picture on demand without
+  RTSP. Follows RenierM26/ha-ezviz#235 by @Ottes42.
+
 ## [1.3.0] — 2026-11-04
 
 Fixes from the HACS review: the card no longer loads code from a CDN, its live

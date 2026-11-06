@@ -14,6 +14,11 @@
         "default": "mdi:pan"
       }
     },
+    "image": {
+      "snapshot": {
+        "default": "mdi:camera"
+      }
+    },
     "number": {
       "detection_sensibility": {
         "default": "mdi:eye"
@@ -43,6 +48,9 @@
     }
   },
   "services": {
+    "capture_picture": {
+      "service": "mdi:camera"
+    },
     "set_alarm_detection_sensibility": {
       "service": "mdi:motion-sensor"
     },

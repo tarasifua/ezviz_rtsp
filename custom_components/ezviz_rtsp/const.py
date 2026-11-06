@@ -48,6 +48,9 @@ ATTR_TYPE = "type_value"
 
 # Service names
 SERVICE_WAKE_DEVICE = "wake_device"
+# Take a picture through the cloud on demand (shown by the camera's Snapshot image)
+SERVICE_CAPTURE_PICTURE = "capture_picture"
+SIGNAL_PICTURE_CAPTURED = "ezviz_rtsp_picture_captured_{}"
 SERVICE_DETECTION_SENSITIVITY = "set_alarm_detection_sensibility"
 
 # Defaults

@@ -81,6 +81,9 @@
     "image": {
       "last_motion_image": {
         "name": "Last motion image"
+      },
+      "snapshot": {
+        "name": "Snapshot"
       }
     },
     "light": {
@@ -269,6 +272,10 @@
     }
   },
   "services": {
+    "capture_picture": {
+      "description": "Takes a new picture through the EZVIZ cloud and shows it in the camera's Snapshot image entity. Wakes battery cameras.",
+      "name": "Capture picture"
+    },
     "set_alarm_detection_sensibility": {
       "description": "Changes the sensibility level of the motion detection.",
       "fields": {

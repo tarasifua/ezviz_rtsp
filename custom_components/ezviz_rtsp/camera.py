@@ -11,10 +11,12 @@ from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.components.stream import CONF_USE_WALLCLOCK_AS_TIMESTAMPS
 from homeassistant.config_entries import SOURCE_IGNORE, SOURCE_INTEGRATION_DISCOVERY
 from homeassistant.const import CONF_IP_ADDRESS, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import discovery_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
     async_get_current_platform,
@@ -30,8 +32,10 @@ from .const import (
     DEFAULT_CAMERA_USERNAME,
     DEFAULT_FFMPEG_ARGUMENTS,
     DOMAIN,
+    SERVICE_CAPTURE_PICTURE,
     SERVICE_DETECTION_SENSITIVITY,
     SERVICE_WAKE_DEVICE,
+    SIGNAL_PICTURE_CAPTURED,
 )
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
@@ -131,6 +135,12 @@ async def async_setup_entry(
 
     platform.async_register_entity_service(
         SERVICE_WAKE_DEVICE, None, "perform_wake_device"
+    )
+    platform.async_register_entity_service(
+        SERVICE_CAPTURE_PICTURE,
+        None,
+        "async_capture_picture",
+        supports_response=SupportsResponse.OPTIONAL,
     )
     platform.async_register_entity_service(
         SERVICE_DETECTION_SENSITIVITY,
@@ -306,6 +316,28 @@ class EzvizCamera(EzvizEntity, Camera):
             self.coordinator.ezviz_client.get_detection_sensibility(self._serial)
         except (HTTPError, PyEzvizError) as err:
             raise PyEzvizError("Cannot wake device") from err
+
+    async def async_capture_picture(self) -> ServiceResponse:
+        """Take a new picture through the EZVIZ cloud.
+
+        Works without RTSP and wakes battery cameras from standby. The picture is
+        shown by the camera's Snapshot image entity.
+        """
+        try:
+            result = await self.hass.async_add_executor_job(
+                self.coordinator.ezviz_client.capture_picture, self._serial, 1
+            )
+        except (HTTPError, PyEzvizError) as err:
+            raise HomeAssistantError(f"Cannot capture picture: {err}") from err
+
+        pic_url = (result.get("captureInfo") or {}).get("picUrl")
+        if not pic_url:
+            raise HomeAssistantError("EZVIZ returned no picture url")
+
+        async_dispatcher_send(
+            self.hass, SIGNAL_PICTURE_CAPTURED.format(self._serial), pic_url
+        )
+        return {"picture_url": pic_url}
 
     def set_alarm_detection_sensibility(
         self, level: int, type_value: int = 0

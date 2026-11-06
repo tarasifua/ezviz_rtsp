@@ -186,6 +186,29 @@ Everything below lives under **Configure** on the integration:
 
 ---
 
+## Fresh pictures on demand
+
+The camera picture shown on a dashboard is the last **alarm** picture, so a
+battery camera is never woken just to draw it. When you want a picture from
+*now*, call the **`ezviz_rtsp.capture_picture`** service on a camera:
+
+```yaml
+action: ezviz_rtsp.capture_picture
+target:
+  entity_id: camera.driveway_gate
+```
+
+The cloud wakes the camera and it takes a full-resolution picture (a few seconds
+on a battery camera; no RTSP needed). It appears in the camera's **Snapshot**
+image entity (`image.<camera>_snapshot`), and the service returns its
+`picture_url` if you ask for a response. Each call wakes the camera, so put it
+behind a button rather than a timer. The snapshot is kept in memory, so it is
+empty again after a restart until the next capture. If a sleeping camera answers
+with EZVIZ error 2009 ("device network exception"), it was slow to wake: try
+again a few seconds later.
+
+---
+
 ## Feeding other apps (Frigate, go2rtc, …)
 
 Once you allow it (see below), every camera can be read by other apps as plain
@@ -304,6 +327,9 @@ This project would not exist without two upstream works; their notices are in
 - **[ezviz-cloud-hass](https://github.com/bvis/ezviz-cloud-hass)** — the
   cloud (VTM) live-view idea and code that this draws on. By
   **[Basilio Vera (@bvis)](https://github.com/bvis)**, under MIT.
+- The **`capture_picture` service and Snapshot image** follow
+  [RenierM26/ha-ezviz#235](https://github.com/RenierM26/ha-ezviz/pull/235) by
+  **[@Ottes42](https://github.com/Ottes42)**.
 - Brand icon: the EZVIZ brand image from
   [home-assistant/brands](https://github.com/home-assistant/brands), with a
   small "video" badge.

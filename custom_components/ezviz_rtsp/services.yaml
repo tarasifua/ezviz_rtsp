@@ -1,3 +1,9 @@
+capture_picture:
+  target:
+    entity:
+      integration: ezviz_rtsp
+      domain: camera
+
 set_alarm_detection_sensibility:
   target:
     entity:
