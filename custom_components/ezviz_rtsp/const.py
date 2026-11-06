@@ -45,6 +45,7 @@ ATTR_DIRECTION = "direction"
 ATTR_SPEED = "speed"
 ATTR_LEVEL = "level"
 ATTR_TYPE = "type_value"
+ATTR_MIN_INTERVAL = "min_interval"
 
 # Service names
 SERVICE_WAKE_DEVICE = "wake_device"

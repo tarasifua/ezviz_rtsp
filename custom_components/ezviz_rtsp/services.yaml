@@ -3,6 +3,18 @@ capture_picture:
     entity:
       integration: ezviz_rtsp
       domain: camera
+  fields:
+    min_interval:
+      required: false
+      example: 300
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 86400
+          step: 1
+          mode: box
+          unit_of_measurement: s
 
 set_alarm_detection_sensibility:
   target:

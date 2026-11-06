@@ -846,7 +846,188 @@ class EzvizVideoCardEditor extends HTMLElement {
   }
 }
 
-// Announce the card to the picker. The frontend may replace window.customCards
+// -- snapshot card ----------------------------------------------------------
+//
+//   type: custom:ezviz-snapshot-card
+//   entity: camera.front     # the camera (required)
+//   image: image.front_snap  # optional; found from the camera's device when left out
+//   title: Front door        # optional; defaults to the camera's name
+//   capture_on_load: true    # optional; take a new picture when the card comes into view
+//   min_interval: 300        # optional; seconds — skip if this camera took one more recently
+//
+// Shows the camera's Snapshot image (the picture taken by capture_picture). With
+// capture_on_load, it calls capture_picture each time the card comes into view:
+// the dashboard view opens, the browser tab returns, the app comes back to the
+// front. min_interval is passed to the service, which keeps the throttle per
+// camera on the server, so several open dashboards still wake a camera only once
+// per interval. Tapping the picture opens the image's more-info dialog.
+
+const SNAPSHOT_RETRY_SECONDS = 5; // a sleeping camera can answer the first call with EZVIZ 2009
+
+const snapshotStyle = /* css */ `
+  :host { display: block; }
+  ha-card { overflow: hidden; position: relative; cursor: pointer; }
+  .pic { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--secondary-background-color, #222); }
+  .empty { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9;
+    color: var(--secondary-text-color); background: var(--secondary-background-color, #222); font-size: 0.9em; }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; color: #fff; background: rgba(0, 0, 0, 0.45); font-size: 14px; }
+  .bar .name { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .bar .when { flex: 0 0 auto; opacity: 0.85; font-size: 12px; }
+  .spin { flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+`;
+
+class EzvizSnapshotCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._capturing = false;
+    this._visible = false;
+  }
+
+  static getStubConfig() {
+    return { entity: "", capture_on_load: true, min_interval: 300 };
+  }
+
+  setConfig(config) {
+    if (!config || !config.entity || !String(config.entity).startsWith("camera.")) {
+      throw new Error("ezviz-snapshot-card: 'entity' (a camera.* entity) is required");
+    }
+    this._config = { capture_on_load: true, min_interval: 300, ...config };
+    this._render();
+  }
+
+  set hass(hass) {
+    const old = this._hass;
+    this._hass = hass;
+    const image = this._imageEntity();
+    if (!old || !image || old.states[image] !== hass.states[image] ||
+        old.states[this._config.entity] !== hass.states[this._config.entity]) {
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  connectedCallback() {
+    if (!this._visTimer) this._visTimer = setInterval(() => this._syncVisibility(), 1000);
+    if (!this._onDocVisibility) {
+      this._onDocVisibility = () => this._syncVisibility();
+      document.addEventListener("visibilitychange", this._onDocVisibility);
+    }
+    this._syncVisibility();
+  }
+
+  disconnectedCallback() {
+    queueMicrotask(() => {
+      if (this.isConnected) return;
+      clearInterval(this._visTimer);
+      this._visTimer = null;
+      if (this._onDocVisibility) {
+        document.removeEventListener("visibilitychange", this._onDocVisibility);
+        this._onDocVisibility = null;
+      }
+      this._visible = false;
+    });
+  }
+
+  // The Snapshot image on the camera's device, unless the config names one.
+  _imageEntity() {
+    if (this._config?.image) return this._config.image;
+    const hass = this._hass;
+    const cam = hass?.entities?.[this._config?.entity];
+    if (!cam?.device_id) return undefined;
+    const match = Object.values(hass.entities).find(
+      (e) => e.device_id === cam.device_id && e.entity_id.startsWith("image.") &&
+        (e.translation_key === "snapshot" || e.entity_id.endsWith("_snapshot"))
+    );
+    return match?.entity_id;
+  }
+
+  // Shown on screen: a hidden tab, another dashboard view (removed or kept laid
+  // out at zero size) and display:none all count as not visible. Scrolling does
+  // not: the card's view being open is what "loaded" means here.
+  _isVisible() {
+    if (!this.isConnected || document.hidden) return false;
+    const rect = this.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return false;
+    const style = getComputedStyle(this);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  _syncVisibility() {
+    if (!this._config) return;
+    const visible = this._isVisible();
+    if (visible === this._visible) return;
+    this._visible = visible;
+    if (visible && this._config.capture_on_load) this._capture(true);
+  }
+
+  async _capture(retry) {
+    if (this._capturing || !this._hass) return;
+    const cam = this._hass.states[this._config.entity];
+    if (!cam || cam.state === "unavailable" || cam.state === "unknown") return;
+    this._capturing = true;
+    this._render();
+    try {
+      await this._hass.callService(
+        "ezviz_rtsp",
+        "capture_picture",
+        { min_interval: Number(this._config.min_interval) || 0 },
+        { entity_id: this._config.entity }
+      );
+    } catch (err) {
+      console.debug(`[ezviz-snapshot-card] ${this._config.entity}: ${err?.message || err}`);
+      if (retry) {
+        setTimeout(() => {
+          if (this._visible) this._capture(false);
+        }, SNAPSHOT_RETRY_SECONDS * 1000);
+      }
+    } finally {
+      this._capturing = false;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this._config) return;
+    const hass = this._hass;
+    const image = this._imageEntity();
+    const img = image && hass?.states[image];
+    const cam = hass?.states[this._config.entity];
+    const name = this._config.title || cam?.attributes?.friendly_name || this._config.entity;
+    const picture = img?.attributes?.entity_picture;
+    const when = img && !["unknown", "unavailable"].includes(img.state)
+      ? new Date(img.state).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : "";
+    // The image proxy URL keeps its token between pictures; add the state so a
+    // new picture is never served from the browser cache.
+    const src = picture ? `${picture}${picture.includes("?") ? "&" : "?"}s=${encodeURIComponent(img.state)}` : "";
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    this.shadowRoot.innerHTML = `
+      <style>${snapshotStyle}</style>
+      <ha-card>
+        ${src ? `<img class="pic" src="${esc(src)}" alt="${esc(name)}">` : `<div class="empty">No snapshot yet</div>`}
+        <div class="bar">
+          <span class="name">${esc(name)}</span>
+          ${this._capturing ? `<span class="spin" title="Taking a picture"></span>` : ""}
+          <span class="when">${esc(when)}</span>
+        </div>
+      </ha-card>`;
+    this.shadowRoot.querySelector("ha-card").onclick = () => {
+      if (!image) return;
+      this.dispatchEvent(new CustomEvent("hass-more-info", {
+        bubbles: true, composed: true, detail: { entityId: image },
+      }));
+    };
+  }
+}
+
+// Announce the cards to the picker. The frontend may replace window.customCards
 // while it boots, so register defensively and re-register if it goes missing.
 const CARD_INFO = {
   type: "ezviz-video-card",
@@ -854,11 +1035,19 @@ const CARD_INFO = {
   description: "Live view of an EZVIZ camera through the EZVIZ cloud",
   preview: true,
 };
+const SNAPSHOT_CARD_INFO = {
+  type: "ezviz-snapshot-card",
+  name: "EZVIZ Snapshot",
+  description: "An EZVIZ camera's on-demand snapshot, optionally taken when the card comes into view",
+  preview: false,
+};
 
 const registerCard = () => {
   window.customCards = window.customCards || [];
-  if (!window.customCards.some((c) => c && c.type === CARD_INFO.type)) {
-    window.customCards.push(CARD_INFO);
+  for (const info of [CARD_INFO, SNAPSHOT_CARD_INFO]) {
+    if (!window.customCards.some((c) => c && c.type === info.type)) {
+      window.customCards.push(info);
+    }
   }
 };
 
@@ -873,6 +1062,9 @@ const define = () => {
   }
   if (!window.customElements.get("ezviz-video-card-editor")) {
     window.customElements.define("ezviz-video-card-editor", EzvizVideoCardEditor);
+  }
+  if (!window.customElements.get("ezviz-snapshot-card")) {
+    window.customElements.define("ezviz-snapshot-card", EzvizSnapshotCard);
   }
 };
 define();

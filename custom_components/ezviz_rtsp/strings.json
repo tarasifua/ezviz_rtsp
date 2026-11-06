@@ -274,6 +274,12 @@
   "services": {
     "capture_picture": {
       "description": "Takes a new picture through the EZVIZ cloud and shows it in the camera's Snapshot image entity. Wakes battery cameras.",
+      "fields": {
+        "min_interval": {
+          "description": "Skip the capture if this camera took a picture less than this many seconds ago (0 = always capture). Lets dashboards ask for a picture on every visit without waking the camera each time.",
+          "name": "Minimum interval"
+        }
+      },
       "name": "Capture picture"
     },
     "set_alarm_detection_sensibility": {
