@@ -10,13 +10,16 @@ This project follows [Semantic Versioning](https://semver.org/).
   and it takes a new full-resolution picture, shown by a new per-camera
   **Snapshot** image entity (`image.<camera>_snapshot`); the service can return
   the `picture_url`. Gives battery cameras a current picture on demand without
-  RTSP. Follows RenierM26/ha-ezviz#235 by @Ottes42.
+  RTSP. Follows RenierM26/ha-ezviz#235 by @ottes (Michael Freund).
 - `capture_picture` takes an optional **`min_interval`** (a call within that
   time of the camera's last capture is skipped) and an **`automatic`** flag.
-- **`custom:ezviz-snapshot-card`**: shows the Snapshot image and takes a new
-  picture whenever it comes into view (`capture_on_load`).
+- **`custom:ezviz-snapshot-card`**: shows the Snapshot image and, with
+  `capture_on_load: true` (off by default, like the video card's `auto_play`),
+  takes a new picture whenever it comes into view.
 - **Configure → Snapshots**: turn those automatic snapshots on or off, and set
   the minimum time between them per camera (default 300 s).
+- A capture that a sleeping camera answers with EZVIZ 2009 (still waking) is
+  retried once by the service after 5 s.
 
 ## [1.3.0] — 2026-11-04
 

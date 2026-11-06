@@ -852,19 +852,20 @@ class EzvizVideoCardEditor extends HTMLElement {
 //   entity: camera.front     # the camera (required)
 //   image: image.front_snap  # optional; found from the camera's device when left out
 //   title: Front door        # optional; defaults to the camera's name
-//   capture_on_load: true    # optional; take a new picture when the card comes into view
+//   capture_on_load: false   # optional; true = take a new picture when the card comes into view
 //   min_interval: 600        # optional; seconds — overrides the integration's Snapshots setting
 //
-// Shows the camera's Snapshot image (the picture taken by capture_picture). With
-// capture_on_load, it calls capture_picture each time the card comes into view:
+// Shows the camera's Snapshot image (the picture taken by capture_picture). Like
+// the video card's auto_play, capture_on_load is off by default, so showing the
+// card never wakes a battery camera unless asked to. With capture_on_load on, it
+// calls capture_picture each time the card comes into view:
 // the dashboard view opens, the browser tab returns, the app comes back to the
 // front. The call is marked automatic, so it follows the integration's
 // Configure → Snapshots options: it is skipped when automatic snapshots are off,
 // and the server keeps the minimum time between pictures per camera (min_interval
 // in the card overrides it), so several open dashboards still wake a camera only
-// once per interval. Tapping the picture opens the image's more-info dialog.
-
-const SNAPSHOT_RETRY_SECONDS = 5; // a sleeping camera can answer the first call with EZVIZ 2009
+// once per interval. A camera slow to wake (EZVIZ 2009) is retried by the
+// service itself. Tapping the picture opens the image's more-info dialog.
 
 const snapshotStyle = /* css */ `
   :host { display: block; }
@@ -887,17 +888,22 @@ class EzvizSnapshotCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._capturing = false;
     this._visible = false;
+    // The resolved Snapshot image entity, and the hass.entities object it was
+    // resolved from (the frontend replaces that object when the registry changes).
+    this._image = undefined;
+    this._imageFrom = undefined;
   }
 
   static getStubConfig() {
-    return { entity: "", capture_on_load: true };
+    return { entity: "", capture_on_load: false };
   }
 
   setConfig(config) {
     if (!config || !config.entity || !String(config.entity).startsWith("camera.")) {
       throw new Error("ezviz-snapshot-card: 'entity' (a camera.* entity) is required");
     }
-    this._config = { capture_on_load: true, ...config };
+    this._config = { capture_on_load: false, ...config };
+    this._imageFrom = undefined; // the camera may have changed: resolve again
     this._render();
   }
 
@@ -937,17 +943,22 @@ class EzvizSnapshotCard extends HTMLElement {
     });
   }
 
-  // The Snapshot image on the camera's device, unless the config names one.
+  // The Snapshot image on the camera's device, unless the config names one. The
+  // scan over the entity registry runs only when the registry object changes, not
+  // on every state update.
   _imageEntity() {
     if (this._config?.image) return this._config.image;
-    const hass = this._hass;
-    const cam = hass?.entities?.[this._config?.entity];
-    if (!cam?.device_id) return undefined;
-    const match = Object.values(hass.entities).find(
+    const entities = this._hass?.entities;
+    if (!entities) return undefined;
+    if (entities === this._imageFrom) return this._image;
+    this._imageFrom = entities;
+    const cam = entities[this._config?.entity];
+    const match = cam?.device_id && Object.values(entities).find(
       (e) => e.device_id === cam.device_id && e.entity_id.startsWith("image.") &&
         (e.translation_key === "snapshot" || e.entity_id.endsWith("_snapshot"))
     );
-    return match?.entity_id;
+    this._image = match ? match.entity_id : undefined;
+    return this._image;
   }
 
   // Shown on screen: a hidden tab, another dashboard view (removed or kept laid
@@ -966,7 +977,7 @@ class EzvizSnapshotCard extends HTMLElement {
     const visible = this._isVisible();
     if (visible === this._visible) return;
     this._visible = visible;
-    if (visible && this._config.capture_on_load) this._capture(true);
+    if (visible && this._config.capture_on_load) this._capture();
   }
 
   _serviceData() {
@@ -976,7 +987,7 @@ class EzvizSnapshotCard extends HTMLElement {
     return data;
   }
 
-  async _capture(retry) {
+  async _capture() {
     if (this._capturing || !this._hass) return;
     const cam = this._hass.states[this._config.entity];
     if (!cam || cam.state === "unavailable" || cam.state === "unknown") return;
@@ -991,11 +1002,6 @@ class EzvizSnapshotCard extends HTMLElement {
       );
     } catch (err) {
       console.debug(`[ezviz-snapshot-card] ${this._config.entity}: ${err?.message || err}`);
-      if (retry) {
-        setTimeout(() => {
-          if (this._visible) this._capture(false);
-        }, SNAPSHOT_RETRY_SECONDS * 1000);
-      }
     } finally {
       this._capturing = false;
       this._render();

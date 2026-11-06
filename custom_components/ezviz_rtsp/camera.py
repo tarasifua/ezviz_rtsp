@@ -1,5 +1,6 @@
 """Support ezviz camera devices."""
 
+import asyncio
 import logging
 import time
 from typing import override
@@ -48,7 +49,34 @@ from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
 from .live import LiveStream, stream_source
 
+try:
+    # pyezvizapi's own parser for capture responses (used by EzvizClient.save_image); it accepts
+    # picUrl, picURL, imageUrl, captureUrl, ... It is private, so keep a fallback in case it moves.
+    from pyezvizapi.client import _first_image_url
+except ImportError:  # pragma: no cover
+
+    def _first_image_url(value: object) -> str | None:
+        info = value.get("captureInfo") if isinstance(value, dict) else None
+        url = info.get("picUrl") if isinstance(info, dict) else None
+        return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
+
+
 _LOGGER = logging.getLogger(__name__)
+
+# A sleeping battery camera often answers the first capture with EZVIZ meta.code 2009
+# ("device network exception") while it wakes; one retry after this long usually succeeds.
+CAPTURE_RETRY_DELAY = 5
+
+
+def _is_wake_timeout(err: Exception) -> bool:
+    """Whether a capture failed with EZVIZ meta.code 2009.
+
+    pyezvizapi reports API errors as PyEzvizError with the payload in the message
+    (``... Got {'meta': {'code': 2009, ...}}``), so the code is read from there.
+    (``max_retries`` on capture_picture only counts 401 re-logins, so it does not
+    cover this.)
+    """
+    return isinstance(err, PyEzvizError) and "'code': 2009" in str(err)
 
 
 def _is_battery_camera(data: dict) -> bool:
@@ -366,16 +394,30 @@ class EzvizCamera(EzvizEntity, Camera):
             return {"picture_url": self._capture_url, "skipped": True}
         started = self._capture_started
         self._capture_started = now
+        client = self.coordinator.ezviz_client
         try:
-            result = await self.hass.async_add_executor_job(
-                self.coordinator.ezviz_client.capture_picture, self._serial, 1
-            )
+            try:
+                result = await self.hass.async_add_executor_job(
+                    client.capture_picture, self._serial, 1
+                )
+            except PyEzvizError as err:
+                if not _is_wake_timeout(err):
+                    raise
+                _LOGGER.debug(
+                    "%s was still waking (EZVIZ 2009); retrying the capture in %s s",
+                    self._serial,
+                    CAPTURE_RETRY_DELAY,
+                )
+                await asyncio.sleep(CAPTURE_RETRY_DELAY)
+                result = await self.hass.async_add_executor_job(
+                    client.capture_picture, self._serial, 1
+                )
         except (HTTPError, PyEzvizError) as err:
             # a failed capture must not hold off the next try
             self._capture_started = started
             raise HomeAssistantError(f"Cannot capture picture: {err}") from err
 
-        pic_url = (result.get("captureInfo") or {}).get("picUrl")
+        pic_url = _first_image_url(result)
         if not pic_url:
             self._capture_started = started
             raise HomeAssistantError("EZVIZ returned no picture url")

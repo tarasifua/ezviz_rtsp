@@ -215,9 +215,10 @@ on a battery camera; no RTSP needed). It appears in the camera's **Snapshot**
 image entity (`image.<camera>_snapshot`), and the service returns its
 `picture_url` if you ask for a response. Each call wakes the camera, so put it
 behind a button rather than a timer. The snapshot is kept in memory, so it is
-empty again after a restart until the next capture. If a sleeping camera answers
-with EZVIZ error 2009 ("device network exception"), it was slow to wake: try
-again a few seconds later.
+empty again after a restart until the next capture. A sleeping camera often
+answers the first request with EZVIZ error 2009 ("device network exception")
+while it wakes; the service then tries once more after 5 seconds, so such a
+call can take a few seconds longer.
 
 Pass `min_interval: <seconds>` to skip the capture when that camera took a
 picture more recently (the call then returns the last picture with
@@ -232,12 +233,14 @@ The integration also ships an **EZVIZ Snapshot** card:
 type: custom:ezviz-snapshot-card
 entity: camera.driveway_gate
 title: Driveway gate      # optional
-capture_on_load: true     # optional; take a picture when the card comes into view
+capture_on_load: true     # optional, off by default; take a picture when the card comes into view
 ```
 
-It shows the camera's Snapshot image and, with `capture_on_load`, asks for a new
-picture each time it comes into view: the dashboard view opens, or the browser
-tab or app comes back to the front. These automatic requests follow
+It shows the camera's Snapshot image. Like the video card's `auto_play`,
+`capture_on_load` is **off by default**, so showing the card never wakes a
+battery camera unless you ask it to. With `capture_on_load: true` it asks for a
+new picture each time it comes into view: the dashboard view opens, or the
+browser tab or app comes back to the front. These automatic requests follow
 **Configure → Snapshots**:
 
 - **Take a snapshot when a dashboard shows the camera** — on by default; turn it
@@ -372,7 +375,7 @@ This project would not exist without two upstream works; their notices are in
   **[Basilio Vera (@bvis)](https://github.com/bvis)**, under MIT.
 - The **`capture_picture` service and Snapshot image** follow
   [RenierM26/ha-ezviz#235](https://github.com/RenierM26/ha-ezviz/pull/235) by
-  **[@Ottes42](https://github.com/Ottes42)**.
+  **[Michael Freund (@ottes)](https://github.com/ottes)**.
 - Brand icon: the EZVIZ brand image from
   [home-assistant/brands](https://github.com/home-assistant/brands), with a
   small "video" badge.
