@@ -25,7 +25,9 @@ This integration talks to them the way the phone app does when you're on
 mobile data. It asks EZVIZ's cloud to wake the camera, pulls the stream down,
 and hands it to Home Assistant as a normal camera. You get a live view, a
 built-in Lovelace card, and the camera stays awake only while you're actually
-looking at it.
+looking at it. When a still is enough, it can also have the camera take a
+fresh picture on demand, or whenever a dashboard shows it (see
+[Fresh pictures on demand](#fresh-pictures-on-demand)).
 
 It is a fork of the **built-in** EZVIZ integration, so everything that one
 does still works here. It lives under its own domain, `ezviz_rtsp`, which means
@@ -90,6 +92,10 @@ neither Mushroom nor any other frontend add-on. The card finds a camera by its
 serial (or `entity`) and plays the integration's **own fast picture stream**,
 falling back to Home Assistant's stream only for a camera the integration does
 not stream itself.
+
+A second card, **EZVIZ Snapshot**, shows still pictures instead of video and
+can take a new one each time it comes into view; see
+[A snapshot whenever the dashboard is opened](#a-snapshot-whenever-the-dashboard-is-opened).
 
 ```yaml
 type: custom:ezviz-video-card
@@ -180,6 +186,12 @@ Everything below lives under **Configure** on the integration:
 - **Release the camera after** — how long the cloud stream is held open after the
   last viewer leaves, in seconds (default **10**; `0` releases it at once). A
   short hold means a quick re-play does not wake the camera again.
+- **Snapshots** — whether the **EZVIZ Snapshot** card may take a new picture
+  when it comes into view (*on by default*), and the minimum time between those
+  automatic pictures for one camera, in seconds (default **300**; `0` takes one
+  on every view), however many dashboards ask. Buttons and scripts that call
+  `capture_picture` are not affected. See
+  [Fresh pictures on demand](#fresh-pictures-on-demand).
 - **General** — request timeout and the ffmpeg arguments for cameras you added
   over local RTSP.
 - **Stream address for other apps** — see below.
@@ -299,6 +311,10 @@ is expected to play here, but only testing will tell.
 
 Verified while building this: **DP2** (battery video doorbell), 2048×1296 H.265
 + AAC through the cloud relay.
+
+Also reported working: **CB3** (battery camera with solar panel; eight of them),
+1920×1080 live view through the cloud relay, and on-demand snapshots
+(`capture_picture`, 1920×1080) in about 2–5 s.
 
 If you try another model, an issue with the result is welcome.
 
