@@ -477,8 +477,11 @@ def test_setup_live_streams_registers_view_and_builds_a_stream_per_camera() -> N
     entry = MagicMock(options={})
     async_setup_live_streams(hass, entry, coordinator)
     assert set(coordinator.live_streams) == {"BK1", "BK2"}
-    # The MPEG-TS view, the public MJPEG view and the card's authenticated view.
-    assert hass.http.register_view.call_count == 3
+    # The MPEG-TS view, the public MJPEG view, the card's authenticated view and
+    # the recordings card's clip view.
+    assert hass.http.register_view.call_count == 4
+    views = {type(call.args[0]).__name__ for call in hass.http.register_view.call_args_list}
+    assert "RecordingClipView" in views
     # A random token is persisted so other apps' addresses survive a restart.
     stored = hass.config_entries.async_update_entry.call_args.kwargs["options"]["stream_token"]
     assert {s.token for s in coordinator.live_streams.values()} == {stored}

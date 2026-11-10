@@ -38,6 +38,7 @@ from .const import (
 )
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .live import async_close_live_streams, async_setup_live_streams
+from .recordings import async_close_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,6 +184,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: EzvizConfigEntry) -> bo
     if sensor_type == ATTR_TYPE_CLOUD:
         await async_close_live_streams(entry.runtime_data)
 
-    return await hass.config_entries.async_unload_platforms(
+    unloaded = await hass.config_entries.async_unload_platforms(
         entry, PLATFORMS_BY_TYPE[sensor_type]
     )
+    if unloaded and sensor_type == ATTR_TYPE_CLOUD and not any(
+        other.entry_id != entry.entry_id and other.data.get(CONF_TYPE) == ATTR_TYPE_CLOUD
+        for other in hass.config_entries.async_loaded_entries(DOMAIN)
+    ):
+        # The last account is going: drop the cached recordings and their files.
+        await async_close_store(hass)
+    return unloaded

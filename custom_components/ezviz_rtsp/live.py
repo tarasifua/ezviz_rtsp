@@ -45,6 +45,7 @@ from .const import (
     DATA_LIVE_VIEW,
     DOMAIN,
 )
+from .recordings import RecordingClipView
 
 if TYPE_CHECKING:
     from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
@@ -564,6 +565,7 @@ def async_setup_live_streams(
         hass.http.register_view(LiveStreamView())
         hass.http.register_view(LiveMjpegView())
         hass.http.register_view(LiveCardMjpegView())
+        hass.http.register_view(RecordingClipView())
 
     options = dict(entry.options)
     token = options.get(CONF_STREAM_TOKEN)

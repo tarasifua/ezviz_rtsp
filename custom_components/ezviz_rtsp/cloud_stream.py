@@ -56,8 +56,8 @@ class LiveSource:
 
     def open(self) -> None:
         """Open the VTM session; raises EzvizStreamError when the camera won't stream."""
-        from pyezvizapi.cloud_stream import open_cloud_stream
         from pyezvizapi.exceptions import PyEzvizError
+        from pyezvizapi.streaming.cloud.bootstrap import open_cloud_stream
 
         try:
             stream = open_cloud_stream(
@@ -267,7 +267,7 @@ def _decrypt(ps: bytes, code: str, codec: str) -> bytes:
 
     The NAL header stays in the clear: two bytes in H.265, one in H.264.
     """
-    from pyezvizapi.cloud_stream import decrypt_hikvision_ps_video  # type: ignore[attr-defined]
+    from pyezvizapi.streaming.cloud.protocol import decrypt_hikvision_ps_video
 
     return decrypt_hikvision_ps_video(ps, code, nalu_header_size=1 if codec == "h264" else 2)
 

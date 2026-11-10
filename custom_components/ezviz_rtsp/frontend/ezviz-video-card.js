@@ -99,7 +99,21 @@ const STRINGS = /* translations */ {
     "hide_play": "Hide the play button",
     "hide_stop": "Hide the stop button",
     "hide_snapshot": "Hide the snapshot button",
-    "show_timestamp": "Show the picture date and time"
+    "show_timestamp": "Show the picture date and time",
+    "rec_title": "{name} recordings",
+    "rec_today": "Today",
+    "rec_yesterday": "Yesterday",
+    "rec_count": "{n} recordings",
+    "rec_none": "No recordings on this day",
+    "rec_partial": "{n}+ recordings (list cut short)",
+    "rec_loading": "Reading the SD card…",
+    "rec_fetching": "Fetching the recording from the camera…",
+    "rec_failed": "{msg}",
+    "rec_prev": "Previous day",
+    "rec_next": "Next day",
+    "rec_refresh": "Refresh",
+    "rec_pick": "Tap a recording to play it",
+    "rec_close": "Close player"
   },
   "uk": {
     "play": "Дивитися",
@@ -127,7 +141,21 @@ const STRINGS = /* translations */ {
     "hide_play": "Приховати кнопку відтворення",
     "hide_stop": "Приховати кнопку зупинки",
     "hide_snapshot": "Приховати кнопку снапшота",
-    "show_timestamp": "Показувати дату й час знімка"
+    "show_timestamp": "Показувати дату й час знімка",
+    "rec_title": "Записи: {name}",
+    "rec_today": "Сьогодні",
+    "rec_yesterday": "Вчора",
+    "rec_count": "Записів: {n}",
+    "rec_none": "Цього дня записів немає",
+    "rec_partial": "Записів: {n}+ (список неповний)",
+    "rec_loading": "Читаємо SD-картку…",
+    "rec_fetching": "Завантажуємо запис із камери…",
+    "rec_failed": "{msg}",
+    "rec_prev": "Попередній день",
+    "rec_next": "Наступний день",
+    "rec_refresh": "Оновити",
+    "rec_pick": "Торкніться запису, щоб відтворити",
+    "rec_close": "Закрити плеєр"
   }
 } /* end translations */;
 
@@ -1392,6 +1420,403 @@ class EzvizSnapshotCard extends HTMLElement {
   }
 }
 
+// -- recordings card -----------------------------------------------------------
+//
+//   type: custom:ezviz-recordings-card
+//   entity: camera.driveway_gate  # or serial: BB1234567
+//   title: Driveway gate          # optional; defaults to "<camera> recordings"
+//   format: auto                  # optional; auto, h264 or hevc (see below)
+//   max_height: 360               # optional; height of the list in pixels
+//
+// Lists one day of the camera's SD-card recordings (newest first, today by
+// default, with buttons for earlier days) and plays the one you tap in the
+// card's own player. Listing only reads the SD index; a recording is fetched
+// from the camera — waking a battery camera — only when it is tapped.
+//
+// The camera records HEVC. "auto" asks for it as is when the browser can play
+// HEVC (Safari, most Chrome/Edge on Windows and macOS) and for an H.264 copy
+// converted by Home Assistant otherwise; if the HEVC copy fails to play the
+// card asks for H.264 once.
+
+const recordingsStyle = /* css */ `
+  .days { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+  .iconbtn {
+    border: 0; background: none; color: var(--secondary-text-color);
+    width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    --mdc-icon-size: 20px; padding: 0;
+  }
+  .iconbtn:hover:not([disabled]) { background: color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+  .iconbtn[disabled] { opacity: 0.35; cursor: default; }
+  .iconbtn.spinning ha-icon { animation: spin 900ms linear infinite; }
+  .media .close { position: absolute; top: 8px; right: 8px; z-index: 3; }
+  .media .close.iconbtn { color: #fff; background: color-mix(in srgb, #000 55%, transparent); width: 30px; height: 30px; }
+  .list {
+    overflow-y: auto; border-radius: 12px;
+    border: 1px solid var(--divider-color, rgba(127,127,127,.25));
+  }
+  .hour {
+    position: sticky; top: 0; z-index: 1;
+    font-size: 11px; font-weight: 500; letter-spacing: .04em;
+    padding: 4px 12px; color: var(--secondary-text-color);
+    background: var(--ha-card-background, var(--card-background-color, #fff));
+    border-bottom: 1px solid var(--divider-color, rgba(127,127,127,.2));
+  }
+  .row {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 8px 12px; border: 0; background: none; cursor: pointer;
+    font: inherit; font-size: 14px; color: var(--primary-text-color); text-align: left;
+  }
+  .row + .row { border-top: 1px solid var(--divider-color, rgba(127,127,127,.12)); }
+  .row:hover { background: color-mix(in srgb, var(--primary-color) 8%, transparent); }
+  .row.on { background: color-mix(in srgb, var(--primary-color) 16%, transparent); }
+  .row ha-icon { --mdc-icon-size: 18px; color: var(--primary-color); flex: 0 0 auto; }
+  .row .time { font-variant-numeric: tabular-nums; flex: 1 1 auto; }
+  .row .len { font-size: 12px; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+  .note { padding: 16px 12px; text-align: center; font-size: 13px; color: var(--secondary-text-color); }
+  .note.error { color: var(--error-color, #db4437); }
+`;
+
+// Whether this browser plays HEVC in MP4 (the camera's own format).
+const playsHevc = () => {
+  try {
+    const video = document.createElement("video");
+    return ["hvc1.1.6.L120.90", "hev1.1.6.L120.90"].some(
+      (codec) => video.canPlayType(`video/mp4; codecs="${codec}"`) !== ""
+    );
+  } catch {
+    return false;
+  }
+};
+
+const localDay = (date) => {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
+class EzvizRecordingsCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._lang = "en";
+    this._day = null; // YYYY-MM-DD; null = today (as the server sees it)
+    this._today = null;
+    this._list = null; // { recordings, complete, date }
+    this._listing = false;
+    this._listError = "";
+    this._selected = null; // the recording being played
+    this._clipState = "idle"; // idle | fetching | playing | error
+    this._clipError = "";
+    // Bumped so a stale answer never lands after a newer request.
+    this._listGen = 0;
+    this._clipGen = 0;
+    this._shown = false;
+  }
+
+  static getStubConfig() {
+    return { entity: "" };
+  }
+
+  setConfig(config) {
+    if (!config || (!config.serial && !config.entity)) {
+      throw new Error("ezviz-recordings-card: 'entity' (or 'serial') is required");
+    }
+    this._config = { format: "auto", max_height: 360, ...config };
+    this._device = undefined;
+    this._list = null;
+    this._day = null;
+    this._closePlayer();
+    this._render();
+    if (this._shown) this._load();
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    const lang = pickLang(hass);
+    if (!this._devices) this._loadDevices();
+    if (first || lang !== this._lang) {
+      this._lang = lang;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return 8;
+  }
+
+  connectedCallback() {
+    if (!this._visTimer) this._visTimer = setInterval(() => this._syncVisibility(), 1000);
+    this._syncVisibility();
+  }
+
+  disconnectedCallback() {
+    queueMicrotask(() => {
+      if (this.isConnected) return;
+      clearInterval(this._visTimer);
+      this._visTimer = null;
+      this._shown = false;
+      this._video()?.pause();
+    });
+  }
+
+  // The list is read the first time the card is on screen, never for a card
+  // sitting on a view nobody opened. A hidden card pauses its player.
+  _syncVisibility() {
+    if (!this._config) return;
+    const rect = this.getBoundingClientRect();
+    const visible = this.isConnected && !document.hidden && rect.width > 0 && rect.height > 0;
+    if (visible && !this._shown) {
+      this._shown = true;
+      if (!this._list && !this._listing) this._load();
+    } else if (!visible && this._shown) {
+      this._shown = false;
+      this._video()?.pause();
+    }
+  }
+
+  async _loadDevices() {
+    if (!this._hass || this._devicesLoading) return;
+    this._devicesLoading = true;
+    try {
+      this._devices = await this._hass.callWS({ type: "ezviz_rtsp/devices" });
+    } catch {
+      this._devices = [];
+    } finally {
+      this._devicesLoading = false;
+    }
+    this._device = undefined;
+    this._render();
+    if (this._shown && !this._list && !this._listing) this._load();
+  }
+
+  _resolveDevice() {
+    if (this._device !== undefined) return this._device;
+    if (!this._devices) return undefined;
+    const { serial, entity } = this._config;
+    this._device =
+      this._devices.find((d) => (serial && d.serial === serial) || (entity && d.entity_id === entity)) ||
+      null;
+    return this._device;
+  }
+
+  _serial() {
+    return this._config.serial || this._resolveDevice()?.serial;
+  }
+
+  _name() {
+    const cam = this._config.entity && this._hass?.states[this._config.entity];
+    return this._resolveDevice()?.name || cam?.attributes?.friendly_name || this._serial() || "";
+  }
+
+  async _load(refresh = false) {
+    const serial = this._serial();
+    if (!serial || !this._hass) return;
+    const gen = ++this._listGen;
+    this._listing = true;
+    this._listError = "";
+    this._render();
+    try {
+      const msg = { type: "ezviz_rtsp/recordings", serial, refresh };
+      if (this._day) msg.date = this._day;
+      const result = await this._hass.callWS(msg);
+      if (gen !== this._listGen) return;
+      this._list = result;
+      this._today = result.today;
+      this._day = result.date;
+    } catch (err) {
+      if (gen !== this._listGen) return;
+      this._list = null;
+      this._listError = err?.message || String(err);
+    } finally {
+      if (gen === this._listGen) {
+        this._listing = false;
+        this._render();
+      }
+    }
+  }
+
+  _shiftDay(days) {
+    const base = this._day || this._today || localDay(new Date());
+    const [y, m, d] = base.split("-").map(Number);
+    const next = localDay(new Date(y, m - 1, d + days));
+    if (this._today && next > this._today) return;
+    this._day = next;
+    this._list = null;
+    this._load();
+  }
+
+  _format(fallback = false) {
+    const wanted = this._config.format;
+    if (fallback || wanted === "h264") return "h264";
+    if (wanted === "hevc") return "hevc";
+    return playsHevc() ? "hevc" : "h264";
+  }
+
+  async _play(rec, fallback = false) {
+    const serial = this._serial();
+    if (!serial || !rec) return;
+    const gen = ++this._clipGen;
+    // A detached <video> keeps playing its sound: stop the old clip first.
+    this._video()?.pause();
+    this._selected = rec;
+    this._clipState = "fetching";
+    this._clipError = "";
+    this._render();
+    const format = this._format(fallback);
+    try {
+      const result = await this._hass.callWS({
+        type: "ezviz_rtsp/recording/clip",
+        serial,
+        begin: rec.begin,
+        end: rec.end,
+        format,
+      });
+      if (gen !== this._clipGen) return;
+      this._clipState = "playing";
+      this._clipFormat = format;
+      this._render();
+      const video = this._video();
+      if (video) {
+        video.src = result.url;
+        video.onerror = () => {
+          // A browser that claimed HEVC but can't decode it gets the H.264 copy.
+          if (this._clipFormat === "hevc" && this._selected === rec) this._play(rec, true);
+        };
+        video.play().catch(() => {});
+      }
+    } catch (err) {
+      if (gen !== this._clipGen) return;
+      this._clipState = "error";
+      this._clipError = err?.message || String(err);
+      this._render();
+    }
+  }
+
+  _closePlayer() {
+    this._clipGen++;
+    const video = this._video();
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+    this._selected = null;
+    this._clipState = "idle";
+    this._clipError = "";
+  }
+
+  _video() {
+    return this.shadowRoot?.querySelector("video");
+  }
+
+  _dayLabel() {
+    const lang = this._lang;
+    const day = this._day || this._today;
+    if (!day) return "";
+    if (day === this._today) return t(lang, "rec_today");
+    const [y, m, d] = day.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    const [ty, tm, td] = (this._today || localDay(new Date())).split("-").map(Number);
+    if (new Date(ty, tm - 1, td - 1).getTime() === date.getTime()) return t(lang, "rec_yesterday");
+    return date.toLocaleDateString(this._hass?.locale?.language || undefined, {
+      weekday: "short", day: "numeric", month: "short",
+    });
+  }
+
+  _render() {
+    if (!this._config || !this.shadowRoot) return;
+    const lang = this._lang;
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const name = this._config.title || t(lang, "rec_title", { name: this._name() });
+    const list = this._list;
+    const count = list ? list.recordings.length : 0;
+    let secondary = this._dayLabel();
+    if (list) {
+      secondary += ` · ${t(lang, list.complete ? "rec_count" : "rec_partial", { n: count })}`;
+    }
+    const atToday = !this._today || (this._day || this._today) >= this._today;
+
+    // Keep a playing <video> element (and its position) across re-renders.
+    const keep = this._clipState === "playing" ? this._video() : null;
+    const media = this._selected
+      ? `<div class="media">
+          ${this._clipState === "playing" ? `<span class="slot"></span>` : `<div class="poster"></div>`}
+          ${this._clipState === "fetching" ? `<div class="message">${esc(t(lang, "rec_fetching"))}</div><div class="spinner"></div>` : ""}
+          ${this._clipState === "error" ? `<div class="message">${esc(this._clipError)}</div>` : ""}
+          <button class="iconbtn close" title="${esc(t(lang, "rec_close"))}"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>`
+      : "";
+
+    let body;
+    if (this._listError) {
+      body = `<div class="note error">${esc(t(lang, "rec_failed", { msg: this._listError }))}</div>`;
+    } else if (!list) {
+      body = `<div class="note">${esc(t(lang, "rec_loading"))}</div>`;
+    } else if (!count) {
+      body = `<div class="note">${esc(t(lang, "rec_none"))}</div>`;
+    } else {
+      let hour = null;
+      const rows = [];
+      list.recordings.forEach((rec, i) => {
+        const start = new Date(rec.start);
+        const h = start.getHours();
+        if (h !== hour) {
+          hour = h;
+          rows.push(`<div class="hour">${String(h).padStart(2, "0")}:00</div>`);
+        }
+        const time = start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const on = this._selected && this._selected.begin === rec.begin && this._selected.end === rec.end;
+        rows.push(`<button class="row${on ? " on" : ""}" data-i="${i}">
+          <ha-icon icon="${on ? "mdi:play-circle" : "mdi:play-circle-outline"}"></ha-icon>
+          <span class="time">${esc(time)}</span><span class="len">${rec.seconds} s</span>
+        </button>`);
+      });
+      body = rows.join("");
+    }
+
+    this.shadowRoot.innerHTML = `
+      <style>${style}${recordingsStyle}</style>
+      <ha-card>
+        <div class="wrap">
+          <div class="header">
+            <div class="tile${this._listError ? " error" : ""}"><ha-icon icon="mdi:filmstrip-box-multiple"></ha-icon></div>
+            <div class="info">
+              <div class="primary">${esc(name)}</div>
+              <div class="secondary">${esc(secondary)}</div>
+            </div>
+            <div class="days">
+              <button class="iconbtn prev" title="${esc(t(lang, "rec_prev"))}"><ha-icon icon="mdi:chevron-left"></ha-icon></button>
+              <button class="iconbtn next" title="${esc(t(lang, "rec_next"))}" ${atToday ? "disabled" : ""}><ha-icon icon="mdi:chevron-right"></ha-icon></button>
+              <button class="iconbtn refresh${this._listing ? " spinning" : ""}" title="${esc(t(lang, "rec_refresh"))}"><ha-icon icon="mdi:refresh"></ha-icon></button>
+            </div>
+          </div>
+          ${media}
+          <div class="list" style="max-height:${Number(this._config.max_height) || 360}px">${body}</div>
+        </div>
+      </ha-card>`;
+
+    const slot = this.shadowRoot.querySelector(".slot");
+    if (slot) {
+      const video = keep || document.createElement("video");
+      video.controls = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "");
+      video.className = "live";
+      slot.replaceWith(video);
+    }
+    const root = this.shadowRoot;
+    root.querySelector(".prev").onclick = () => this._shiftDay(-1);
+    root.querySelector(".next").onclick = () => this._shiftDay(1);
+    root.querySelector(".refresh").onclick = () => this._load(true);
+    const close = root.querySelector(".close");
+    if (close) close.onclick = () => { this._closePlayer(); this._render(); };
+    root.querySelectorAll(".row").forEach((row) => {
+      row.onclick = () => this._play(list.recordings[Number(row.dataset.i)]);
+    });
+  }
+}
+
 // Announce the cards to the picker. The frontend may replace window.customCards
 // while it boots, so register defensively and re-register if it goes missing.
 const CARD_INFO = {
@@ -1407,9 +1832,16 @@ const SNAPSHOT_CARD_INFO = {
   preview: false,
 };
 
+const RECORDINGS_CARD_INFO = {
+  type: "ezviz-recordings-card",
+  name: "EZVIZ Recordings",
+  description: "An EZVIZ camera's SD-card recordings by day, played in the card",
+  preview: false,
+};
+
 const registerCard = () => {
   window.customCards = window.customCards || [];
-  for (const info of [CARD_INFO, SNAPSHOT_CARD_INFO]) {
+  for (const info of [CARD_INFO, SNAPSHOT_CARD_INFO, RECORDINGS_CARD_INFO]) {
     if (!window.customCards.some((c) => c && c.type === info.type)) {
       window.customCards.push(info);
     }
@@ -1430,6 +1862,9 @@ const define = () => {
   }
   if (!window.customElements.get("ezviz-snapshot-card")) {
     window.customElements.define("ezviz-snapshot-card", EzvizSnapshotCard);
+  }
+  if (!window.customElements.get("ezviz-recordings-card")) {
+    window.customElements.define("ezviz-recordings-card", EzvizRecordingsCard);
   }
 };
 define();

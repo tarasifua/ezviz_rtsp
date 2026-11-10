@@ -28,6 +28,8 @@ built-in Lovelace card, and the camera stays awake only while you're actually
 looking at it. When a still is enough, it can also have the camera take a
 fresh picture on demand, or whenever a dashboard shows it (see
 [Fresh pictures on demand](#fresh-pictures-on-demand)).
+With an SD card in the camera, it can also list and play back the camera's
+recordings (see [Recordings on the SD card](#recordings-on-the-sd-card)).
 
 It is a fork of the **built-in** EZVIZ integration, so everything that one
 does still works here. It lives under its own domain, `ezviz_rtsp`, which means
@@ -103,6 +105,8 @@ integration does not stream itself.
 A second card, **EZVIZ Snapshot**, shows still pictures instead of video and
 can take a new one each time it comes into view; see
 [A snapshot whenever the dashboard is opened](#a-snapshot-whenever-the-dashboard-is-opened).
+A third, **EZVIZ Recordings**, lists a camera's SD-card recordings by day and
+plays the one you tap; see [Recordings on the SD card](#recordings-on-the-sd-card).
 
 ```yaml
 type: custom:ezviz-video-card
@@ -362,6 +366,97 @@ for the battery.
 
 ---
 
+## Recordings on the SD card
+
+A camera with a microSD card keeps its recordings there, and the EZVIZ cloud can
+both **list** them and **replay** them — the same way playback works in the
+EZVIZ app away from home. The **EZVIZ Recordings** card brings that into Home
+Assistant: it lists one day of a camera's recordings and plays the one you tap,
+right in the card.
+
+```yaml
+type: custom:ezviz-recordings-card
+entity: camera.driveway_gate   # or serial: BB1234567
+title: Driveway gate           # optional; defaults to "<camera> recordings"
+format: auto                   # optional; auto, h264 or hevc
+max_height: 360                # optional; height of the list in pixels
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `entity` | — | The camera entity. Either this or `serial` is required. |
+| `serial` | — | The device serial instead of an entity. |
+| `title` | "*camera* recordings" | The heading in the card. |
+| `format` | `auto` | The video format the card asks for. `auto` asks for the camera's own **HEVC** when the browser says it can play it and for **H.264** otherwise; if HEVC then fails to play, it asks for H.264 once. `hevc` or `h264` force one. |
+| `max_height` | `360` | Height of the scrolling list, in pixels. |
+
+### Using it
+
+- The card opens on **today**. The arrows in the header go to earlier days (and
+  back, up to today); the refresh button searches the camera again.
+- Recordings are listed **newest first, grouped by hour**, each with its start
+  time and length. A camera that records motion events typically shows clips of
+  8–16 seconds; a busy camera can have a few hundred a day.
+- **Tap a recording to play it** in the card's player, with the usual video
+  controls (pause, seek, full screen). Tap another to switch, or close the
+  player with ✕. The card shows "Fetching the recording from the camera…"
+  while the clip is on its way.
+- The list is read the first time the card is on screen, not when a dashboard
+  merely contains it; a card that leaves the screen pauses its player.
+
+### What it costs, and what to expect
+
+- **Battery.** Both listing and playing go through the camera itself: the SD
+  card is in the camera, and the cloud only relays. A sleeping battery camera
+  is woken for each (listing a day is a few seconds of work, playing a
+  recording about as much as opening the live view), which is why nothing
+  happens until the card is on screen or a recording is tapped.
+- **Speed.** Listing a day takes 3–12 seconds (the index answers 50 recordings
+  at a time). A sleeping camera may not answer its first search in time; the
+  integration asks once more after 5 seconds. A short clip takes about
+  **15–30 seconds** to arrive — most of it the camera waking up, then a few
+  seconds of conversion.
+- **Caching.** A fetched recording is kept in Home Assistant (the last 16, as
+  MP4 files in a private temporary folder that is removed when the integration
+  unloads), so seeking and playing it again don't touch the camera. A past
+  day's list is kept until you press refresh; today's for a minute.
+- **Format.** The camera records **H.265/HEVC**. Safari (and the iOS/macOS
+  Home Assistant apps) and most Chrome and Edge builds on Windows and macOS play
+  it as is; the integration only repackages it as MP4. Firefox and browsers
+  without HEVC get an **H.264** copy that Home Assistant converts with ffmpeg —
+  a few seconds of CPU per clip on a Raspberry Pi 5.
+- **One viewer at a time.** EZVIZ serves one cloud session per camera. Stop
+  the camera's live view before playing a recording (the card says so if you
+  don't), and expect "The camera refused to play the recording" when the
+  EZVIZ app is watching the same camera.
+- **Time zone.** The SD index is in the camera's local time. The integration
+  reads it in Home Assistant's time zone, so the two should match.
+- **Encrypted cameras.** A camera with video encryption on needs its
+  verification code under **Configure → Verification codes**, as for the live
+  view; the recording is decrypted with it.
+
+### How it works
+
+The list comes from the cloud's SD index (`/v3/streaming/v2/records`, the
+endpoint behind the app's playback timeline): at most 50 recordings per
+answer, oldest first, so the integration pages forward through the day.
+Playback asks the VTM relay — the same relay as the live view — to stream the
+chosen interval from the SD card; the integration collects it as MPEG-PS,
+converts it with ffmpeg to an MP4 with the index at the front, and serves it to
+the card from an authenticated view that supports range requests (seeking).
+The card reaches the file through a short-lived signed path, handed out by the
+websocket command that prepared it.
+
+Two websocket commands carry it, for anyone building their own UI:
+
+| Command | Data | Returns |
+|---|---|---|
+| `ezviz_rtsp/recordings` | `serial`, optional `date` (`YYYY-MM-DD`, local; today by default), optional `refresh` | `date`, `today`, `complete`, and `recordings`: newest first, each with `begin`/`end` (UTC, `20261110T083702Z`), `start` (local ISO time) and `seconds` |
+| `ezviz_rtsp/recording/clip` | `serial`, `begin`, `end`, optional `format` (`h264` default, or `hevc`) | `url`: a signed path to the MP4, valid for an hour; waits until the clip is ready |
+
+Recordings need **pyezvizapi 2.0.0**, the first release with SD playback over
+the cloud relay; see the [changelog](CHANGELOG.md).
+
 ## Feeding other apps (Frigate, go2rtc, …)
 
 Once you allow it (see below), every camera can be read by other apps as plain
@@ -468,6 +563,31 @@ belongs to.
 
 A verification code is only applied to cameras that actually encrypt video.
 Re-check it under **Configure → Verification codes**.
+
+</details>
+
+<details>
+<summary>The recordings card says the camera did not answer in time</summary>
+
+The camera was asleep and didn't answer the SD search (EZVIZ error 2009); the
+integration already asked twice. Press refresh — it is usually awake by then.
+
+</details>
+
+<details>
+<summary>The recordings card reports a problem reading the SD card</summary>
+
+EZVIZ answered the search with a device exception (error 2004). Check the
+camera's storage in the EZVIZ app: the card may need formatting, or replacing.
+
+</details>
+
+<details>
+<summary>A recording won't play</summary>
+
+"The camera refused to play the recording" means another session has the
+camera — its live view in Home Assistant or the EZVIZ app. Stop that and tap
+again. If an HEVC recording stays black, set `format: h264` on the card.
 
 </details>
 
