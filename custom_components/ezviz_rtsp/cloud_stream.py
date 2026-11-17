@@ -27,15 +27,10 @@ class EzvizStreamError(Exception):
     """The cloud live stream could not be opened or read."""
 
 
-class EzvizStreamDecodeError(EzvizStreamError):
-    """ffmpeg found no frame it could decode: a wrong verification code, or a broken stream."""
-
-
 _IMKH_HEADER = 40  # EZVIZ prefixes the MPEG-PS stream with a 40-byte "IMKH" header.
 # MPEG-PS stream types in the program stream map.
 _CODECS = {0x1B: "h264", 0x24: "hevc"}
 _DEFAULT_CODEC = "hevc"
-_FFMPEG_TIMEOUT = 15
 
 
 class LiveSource:
@@ -56,17 +51,24 @@ class LiveSource:
 
     def open(self) -> None:
         """Open the VTM session; raises EzvizStreamError when the camera won't stream."""
-        from pyezvizapi.cloud_stream import open_cloud_stream
-        from pyezvizapi.exceptions import PyEzvizError
+        from .pyezvizapi.exceptions import PyEzvizError
+        from .pyezvizapi.streaming.cloud.bootstrap import open_cloud_stream
 
         try:
             stream = open_cloud_stream(
                 self._client, self._serial, channel=self._channel, timeout=self._timeout
             )
-            stream.start()
         except PyEzvizError as err:
             raise EzvizStreamError(f"Live stream failed: {err}") from err
         except OSError as err:
+            raise EzvizStreamError(f"Live stream failed: {err}") from err
+        try:
+            stream.start()
+        except (PyEzvizError, OSError) as err:
+            # The session is open by now: close it, or the camera keeps a session
+            # it will not hand out again (EZVIZ refuses parallel ones).
+            with contextlib.suppress(Exception):
+                stream.close()
             raise EzvizStreamError(f"Live stream failed: {err}") from err
         with self._lock:
             self._stream = stream
@@ -224,50 +226,12 @@ def decrypt_packs(packs: list[bytes], code: str | None, codec: str) -> list[byte
     return out
 
 
-async def async_ps_to_jpeg(ps: bytes, ffmpeg_bin: str) -> bytes:
-    """Decode the first frame of an MPEG-PS stream into a JPEG."""
-    jpeg, err = await _ffmpeg(
-        ffmpeg_bin, ps, "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1"
-    )
-    if not jpeg.startswith(b"\xff\xd8"):
-        raise EzvizStreamDecodeError(f"Could not decode a keyframe: {err or 'no frame decoded'}")
-    return jpeg
-
-
-async def _ffmpeg(ffmpeg_bin: str, ps: bytes, *output: str) -> tuple[bytes, str]:
-    """Run ffmpeg on an MPEG-PS fed through stdin; returns stdout and stderr."""
-    proc = await asyncio.create_subprocess_exec(
-        ffmpeg_bin,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "mpeg",
-        "-i",
-        "pipe:0",
-        "-map",
-        "0:v:0",
-        *output,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        async with asyncio.timeout(_FFMPEG_TIMEOUT):
-            out, err = await proc.communicate(ps)
-    except TimeoutError as exc:
-        proc.kill()
-        await proc.wait()
-        raise EzvizStreamError("ffmpeg did not finish in time") from exc
-    return out, err.decode(errors="replace").strip()
-
-
 def _decrypt(ps: bytes, code: str, codec: str) -> bytes:
     """Decrypt the encrypted NAL bodies with the verification code (pyezvizapi).
 
     The NAL header stays in the clear: two bytes in H.265, one in H.264.
     """
-    from pyezvizapi.cloud_stream import decrypt_hikvision_ps_video  # type: ignore[attr-defined]
+    from .pyezvizapi.streaming.cloud.protocol import decrypt_hikvision_ps_video
 
     return decrypt_hikvision_ps_video(ps, code, nalu_header_size=1 if codec == "h264" else 2)
 

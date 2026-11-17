@@ -11,10 +11,10 @@ from homeassistant.components.update import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from pyezvizapi import HTTPError, PyEzvizError
 
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
+from .pyezvizapi import HTTPError, PyEzvizError
 
 PARALLEL_UPDATES = 1
 
@@ -36,7 +36,7 @@ async def async_setup_entry(
         EzvizUpdateEntity(coordinator, camera, sensor, UPDATE_ENTITY_TYPES)
         for camera in coordinator.data
         for sensor, value in coordinator.data[camera].items()
-        if sensor in UPDATE_ENTITY_TYPES.key
+        if sensor == UPDATE_ENTITY_TYPES.key
         if value
     )
 
@@ -66,36 +66,36 @@ class EzvizUpdateEntity(EzvizEntity, UpdateEntity):
     @override
     def installed_version(self) -> str | None:
         """Version installed and in use."""
-        return self.data["version"]
+        return self.data.get("version")
 
     @property
     @override
     def in_progress(self) -> bool:
         """Update installation progress."""
-        return bool(self.data["upgrade_in_progress"])
+        return bool(self.data.get("upgrade_in_progress"))
 
     @property
     @override
     def latest_version(self) -> str | None:
         """Latest version available for install."""
-        if self.data["upgrade_available"]:
-            return self.data["latest_firmware_info"]["version"]
+        if self.data.get("upgrade_available"):
+            return (self.data.get("latest_firmware_info") or {}).get("version")
 
         return self.installed_version
 
     @override
     def release_notes(self) -> str | None:
         """Return full release notes."""
-        if self.data["latest_firmware_info"]:
-            return self.data["latest_firmware_info"].get("desc")
+        if firmware := self.data.get("latest_firmware_info"):
+            return firmware.get("desc")
         return None
 
     @property
     @override
     def update_percentage(self) -> int | None:
         """Update installation progress."""
-        if self.data["upgrade_in_progress"]:
-            return self.data["upgrade_percent"]
+        if self.data.get("upgrade_in_progress"):
+            return self.data.get("upgrade_percent")
         return None
 
     @override

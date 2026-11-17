@@ -15,10 +15,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import event as evt
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
-from pyezvizapi import HTTPError, PyEzvizError, SupportExt
 
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizBaseEntity
+from .pyezvizapi import HTTPError, PyEzvizError, SupportExt
 
 PARALLEL_UPDATES = 1
 OFF_DELAY = timedelta(seconds=60)  # Camera firmware has hard coded turn off.
@@ -74,7 +74,11 @@ class EzvizSirenEntity(EzvizBaseEntity, SirenEntity, RestoreEntity):
         self._attr_is_on = last_state.state == STATE_ON
 
         if self._attr_is_on:
-            evt.async_call_later(self.hass, OFF_DELAY, self.off_delay_listener)
+            # Keep the cancel handle, or a later turn-on/turn-off cannot cancel
+            # this restored timer and it flips the state off early.
+            self._delay_listener = evt.async_call_later(
+                self.hass, OFF_DELAY, self.off_delay_listener
+            )
 
     @override
     async def async_turn_off(self, **kwargs: Any) -> None:

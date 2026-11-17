@@ -25,8 +25,11 @@ CONF_SNAPSHOT_INTERVAL = "snapshot_interval"  # minimum seconds between automati
 CONF_STREAM_TOKEN = "stream_token"  # guards the live address other apps read
 CONF_STREAM_ENABLED = "stream_enabled"  # whether other apps may read those addresses
 CONF_INTERNAL_TOKEN = "internal_token"  # guards the card's own picture address
+CONF_RECORDINGS_KEEP_DAYS = "recordings_keep_days"  # days downloaded clips stay in /media
 DATA_LIVE_VIEW = f"{DOMAIN}_live_view_registered"
 DATA_CARD = f"{DOMAIN}_card_registered"
+DATA_CARD_PATHS = f"{DOMAIN}_card_paths_registered"
+DATA_CARD_LOCK = f"{DOMAIN}_card_lock"
 DATA_WS = f"{DOMAIN}_ws_registered"
 
 # The Lovelace card the integration ships and serves.
@@ -49,14 +52,19 @@ ATTR_LEVEL = "level"
 ATTR_TYPE = "type_value"
 ATTR_MIN_INTERVAL = "min_interval"
 ATTR_AUTOMATIC = "automatic"
+ATTR_FORMAT = "format"
 
 # Service names
 SERVICE_WAKE_DEVICE = "wake_device"
 # Take a picture through the cloud on demand (shown by the camera's Snapshot image)
 SERVICE_CAPTURE_PICTURE = "capture_picture"
 SIGNAL_PICTURE_CAPTURED = "ezviz_rtsp_picture_captured_{}"
+# Download the camera's latest SD-card recording to the media folder on demand
+SERVICE_DOWNLOAD_RECORDING = "download_recording"
+SIGNAL_RECORDING_DOWNLOADED = "ezviz_rtsp_recording_downloaded_{}"
 DEFAULT_AUTO_SNAPSHOT = True
 DEFAULT_SNAPSHOT_INTERVAL = 300
+DEFAULT_RECORDINGS_KEEP_DAYS = 7
 SERVICE_DETECTION_SENSITIVITY = "set_alarm_detection_sensibility"
 
 # Defaults

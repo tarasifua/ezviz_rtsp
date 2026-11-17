@@ -83,12 +83,19 @@ async def _setup(hass) -> MockConfigEntry:
         unique_id="owner@example.com",
     )
     entry.add_to_hass(hass)
-    # Only the platforms this fork adds to: the camera and its button.
+    # Only the platforms this fork adds to: the camera, its button, images, sensors.
     with (
         patch("custom_components.ezviz_rtsp.EzvizClient", _FakeClient),
         patch.dict(
             "custom_components.ezviz_rtsp.PLATFORMS_BY_TYPE",
-            {ATTR_TYPE_CLOUD: [Platform.CAMERA, Platform.BUTTON, Platform.IMAGE]},
+            {
+                ATTR_TYPE_CLOUD: [
+                    Platform.CAMERA,
+                    Platform.BUTTON,
+                    Platform.IMAGE,
+                    Platform.SENSOR,
+                ]
+            },
         ),
         patch("custom_components.ezviz_rtsp.camera.get_ffmpeg_manager"),
     ):
@@ -120,10 +127,12 @@ async def test_battery_camera_sets_up_and_offers_a_cloud_stream(hass) -> None:
     assert entry.options["internal_token"]
     assert hass.data[DATA_LIVE_VIEW] is True
 
-    # The camera gets a Request snapshot button in Controls, even without PTZ.
+    # The camera gets a Request snapshot and a Download latest recording button
+    # in Controls, even without PTZ.
     button_ids = hass.states.async_entity_ids("button")
-    assert len(button_ids) == 1, button_ids
-    assert button_ids[0].endswith("_request_snapshot")
+    assert len(button_ids) == 2, button_ids
+    assert any(entity.endswith("_request_snapshot") for entity in button_ids)
+    assert any(entity.endswith("_download_latest_recording") for entity in button_ids)
 
     # A battery camera must not trigger the RTSP discovery flow.
     assert hass.config_entries.flow.async_progress() == []
@@ -153,6 +162,56 @@ async def test_battery_camera_sets_up_and_offers_a_cloud_stream(hass) -> None:
     # Both integration services are registered (wake + detection sensitivity).
     assert hass.services.has_service(DOMAIN, "wake_device")
     assert hass.services.has_service(DOMAIN, "set_alarm_detection_sensibility")
+
+
+async def test_card_registration_retries_after_a_failure(hass) -> None:
+    """A failure while shipping the card must not block a later retry."""
+    from custom_components.ezviz_rtsp import _async_register_card
+
+    await _setup(hass)
+    # Pretend the card still has to be registered (as after a failed attempt).
+    hass.data.pop(DATA_CARD)
+
+    with (
+        patch(
+            "custom_components.ezviz_rtsp.async_get_integration",
+            side_effect=RuntimeError("boom"),
+        ),
+        pytest.raises(RuntimeError),
+    ):
+        await _async_register_card(hass)
+
+    assert hass.data.get(DATA_CARD) is not True
+
+    # The static paths were added before the failure, so the retry must not add
+    # them again (aiohttp refuses a route registered twice) - it still finishes.
+    await _async_register_card(hass)
+    assert hass.data[DATA_CARD] is True
+
+
+async def test_an_entity_goes_unavailable_when_its_camera_leaves(hass) -> None:
+    """A camera that leaves the account must not raise on every poll.
+
+    The entity stays loaded, so ``data`` and ``available`` are read on each
+    coordinator update; a missing camera used to raise ``KeyError`` there.
+    """
+    entry = await _setup(hass)
+    camera_id = hass.states.async_entity_ids("camera")[0]
+    entity = hass.data["entity_components"][Platform.CAMERA].get_entity(camera_id)
+    coordinator = entry.runtime_data
+
+    assert entity.available is True
+    assert entity.data["name"] == "Door"
+
+    # The camera is gone from the next poll: reads are empty, not a KeyError.
+    coordinator.data = {}
+    assert entity.data == {}
+    assert entity.available is False
+
+    # A failed poll makes the entity unavailable even with data present.
+    coordinator.data = CAM_DATA
+    coordinator.last_update_success = False
+    assert entity.available is False
 
 
 async def test_request_snapshot_button_updates_the_snapshot_image(hass) -> None:

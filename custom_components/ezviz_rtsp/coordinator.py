@@ -9,16 +9,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from pyezvizapi.client import EzvizClient
-from pyezvizapi.exceptions import (
+
+from .const import DOMAIN
+from .pyezvizapi.client import EzvizClient
+from .pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
     HTTPError,
     InvalidURL,
     PyEzvizError,
 )
-
-from .const import DOMAIN
 
 if TYPE_CHECKING:
     from .live import LiveStream
@@ -73,3 +73,9 @@ class EzvizDataUpdateCoordinator(DataUpdateCoordinator):
 
         except (InvalidURL, HTTPError, PyEzvizError) as error:
             raise UpdateFailed(f"Invalid response from API: {error}") from error
+
+        except TimeoutError as error:
+            # asyncio.timeout raises a bare TimeoutError; without this it reaches
+            # DataUpdateCoordinator as an unexpected error and logs a traceback
+            # every interval instead of a clean "update failed".
+            raise UpdateFailed(f"The EZVIZ API did not answer in time: {error}") from error

@@ -11,7 +11,7 @@ from homeassistant.components import ffmpeg
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.components.stream import CONF_USE_WALLCLOCK_AS_TIMESTAMPS
-from homeassistant.config_entries import SOURCE_IGNORE, SOURCE_INTEGRATION_DISCOVERY
+from homeassistant.config_entries import SOURCE_INTEGRATION_DISCOVERY
 from homeassistant.const import CONF_IP_ADDRESS, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -23,11 +23,10 @@ from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
     async_get_current_platform,
 )
-from pyezvizapi.exceptions import HTTPError, InvalidHost, PyEzvizError
-from pyezvizapi.utils import decrypt_image
 
 from .const import (
     ATTR_AUTOMATIC,
+    ATTR_FORMAT,
     ATTR_LEVEL,
     ATTR_MIN_INTERVAL,
     ATTR_SERIAL,
@@ -42,17 +41,21 @@ from .const import (
     DOMAIN,
     SERVICE_CAPTURE_PICTURE,
     SERVICE_DETECTION_SENSITIVITY,
+    SERVICE_DOWNLOAD_RECORDING,
     SERVICE_WAKE_DEVICE,
     SIGNAL_PICTURE_CAPTURED,
 )
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
-from .live import LiveStream, stream_source
+from .live import LiveStream, is_battery_camera, rtsp_entry, stream_source
+from .pyezvizapi.exceptions import HTTPError, InvalidHost, PyEzvizError
+from .pyezvizapi.utils import decrypt_image
+from .recordings import FORMATS, RecordingError, async_download_latest, find_camera
 
 try:
     # pyezvizapi's own parser for capture responses (used by EzvizClient.save_image); it accepts
     # picUrl, picURL, imageUrl, captureUrl, ... It is private, so keep a fallback in case it moves.
-    from pyezvizapi.client import _first_image_url
+    from .pyezvizapi.client import _first_image_url
 except ImportError:  # pragma: no cover
 
     def _first_image_url(value: object) -> str | None:
@@ -77,18 +80,6 @@ def _is_wake_timeout(err: Exception) -> bool:
     cover this.)
     """
     return isinstance(err, PyEzvizError) and "'code': 2009" in str(err)
-
-
-def _is_battery_camera(data: dict) -> bool:
-    """Whether a camera runs on battery (no local RTSP, sleeps between wakes).
-
-    EZVIZ reports a battery level or a battery work mode for these; they expose
-    no RTSP server, so the local ``rtsp://`` source can never play them.
-    """
-    return (
-        data.get("battery_level") is not None
-        or data.get("battery_camera_work_mode") is not None
-    )
 
 
 async def async_request_snapshot(
@@ -156,16 +147,12 @@ async def async_setup_entry(
     camera_entities = []
 
     for camera, value in coordinator.data.items():
-        camera_rtsp_entry = [
-            item
-            for item in hass.config_entries.async_entries(DOMAIN)
-            if item.unique_id == camera and item.source != SOURCE_IGNORE
-        ]
+        camera_rtsp_entry = rtsp_entry(hass, camera)
 
-        if camera_rtsp_entry:
-            ffmpeg_arguments = camera_rtsp_entry[0].options[CONF_FFMPEG_ARGUMENTS]
-            camera_username = camera_rtsp_entry[0].data[CONF_USERNAME]
-            camera_password = camera_rtsp_entry[0].data[CONF_PASSWORD]
+        if camera_rtsp_entry is not None:
+            ffmpeg_arguments = camera_rtsp_entry.options[CONF_FFMPEG_ARGUMENTS]
+            camera_username = camera_rtsp_entry.data[CONF_USERNAME]
+            camera_password = camera_rtsp_entry.data[CONF_PASSWORD]
 
             camera_rtsp_stream = f"rtsp://{camera_username}:{camera_password}@{value['local_ip']}:{value['local_rtsp_port']}{ffmpeg_arguments}"
             _LOGGER.debug(
@@ -179,7 +166,7 @@ async def async_setup_entry(
         else:
             # No local RTSP: play the camera through the EZVIZ cloud instead.
             # Battery cameras never answer RTSP, so don't ask for credentials.
-            if not _is_battery_camera(value):
+            if not is_battery_camera(value):
                 discovery_flow.async_create_flow(
                     hass,
                     DOMAIN,
@@ -213,7 +200,7 @@ async def async_setup_entry(
                 camera_rtsp_stream,
                 value["local_rtsp_port"],
                 ffmpeg_arguments,
-                use_cloud=not camera_rtsp_entry,
+                use_cloud=camera_rtsp_entry is None,
             )
         )
 
@@ -231,6 +218,12 @@ async def async_setup_entry(
             vol.Optional(ATTR_AUTOMATIC, default=False): cv.boolean,
         },
         "async_capture_picture",
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    platform.async_register_entity_service(
+        SERVICE_DOWNLOAD_RECORDING,
+        {vol.Optional(ATTR_FORMAT, default="h264"): vol.In(FORMATS)},
+        "async_download_recording",
         supports_response=SupportsResponse.OPTIONAL,
     )
     platform.async_register_entity_service(
@@ -303,19 +296,19 @@ class EzvizCamera(EzvizEntity, Camera):
     @override
     def is_on(self) -> bool:
         """Return true if on."""
-        return bool(self.data["status"])
+        return bool(self.data.get("status"))
 
     @property
     @override
     def is_recording(self) -> bool:
         """Return true if the device is recording."""
-        return self.data["alarm_notify"]
+        return bool(self.data.get("alarm_notify"))
 
     @property
     @override
     def motion_detection_enabled(self) -> bool:
         """Camera Motion Detection Status."""
-        return self.data["alarm_notify"]
+        return bool(self.data.get("alarm_notify"))
 
     @override
     def enable_motion_detection(self) -> None:
@@ -386,7 +379,8 @@ class EzvizCamera(EzvizEntity, Camera):
             return stream_source(self.hass, self._live)
         if self._password is None:
             return None
-        local_ip = self.data["local_ip"]
+        if (local_ip := self.data.get("local_ip")) is None:
+            return None
         self._rtsp_stream = (
             f"rtsp://{self._username}:{self._password}@"
             f"{local_ip}:{self._local_rtsp_port}{self._ffmpeg_arguments}"
@@ -440,6 +434,22 @@ class EzvizCamera(EzvizEntity, Camera):
         return await async_request_snapshot(
             self.hass, self.coordinator, self._serial, min_interval=min_interval or 0
         )
+
+    async def async_download_recording(self, format: str = "h264") -> ServiceResponse:
+        """Download the camera's latest SD-card recording into the media folder.
+
+        Finds the newest recording of today (or yesterday, when today has none),
+        fetches it through the EZVIZ cloud and saves it as an MP4 under
+        ``media/ezviz_rtsp``. Its details are also announced to the camera's
+        Latest recording sensor.
+        """
+        camera = find_camera(self.hass, self._serial)
+        if camera is None:
+            raise HomeAssistantError("The camera is not available")
+        try:
+            return await async_download_latest(self.hass, camera, fmt=format)
+        except RecordingError as err:
+            raise HomeAssistantError(str(err)) from err
 
     def set_alarm_detection_sensibility(
         self, level: int, type_value: int = 0

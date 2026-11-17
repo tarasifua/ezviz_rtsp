@@ -8,13 +8,14 @@ from homeassistant.components.button import ButtonEntity, ButtonEntityDescriptio
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from pyezvizapi import EzvizClient
-from pyezvizapi.constants import SupportExt
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 from .camera import async_request_snapshot
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
+from .pyezvizapi import EzvizClient
+from .pyezvizapi.constants import SupportExt
+from .pyezvizapi.exceptions import HTTPError, PyEzvizError
+from .recordings import RecordingError, async_download_latest, find_camera
 
 PARALLEL_UPDATES = 1
 
@@ -87,6 +88,10 @@ async def async_setup_entry(
     async_add_entities(
         EzvizSnapshotButton(coordinator, camera) for camera in coordinator.data
     )
+    # ... and can download its latest SD-card recording into the media folder.
+    async_add_entities(
+        EzvizRecordingButton(coordinator, camera) for camera in coordinator.data
+    )
 
 
 class EzvizButtonEntity(EzvizEntity, ButtonEntity):
@@ -140,3 +145,30 @@ class EzvizSnapshotButton(EzvizEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Waking the camera can take a while; the service retries a 2009 once."""
         await async_request_snapshot(self.hass, self.coordinator, self._serial)
+
+
+class EzvizRecordingButton(EzvizEntity, ButtonEntity):
+    """Download the camera's latest SD-card recording into the media folder."""
+
+    _attr_translation_key = "download_recording"
+    _attr_icon = "mdi:download"
+
+    def __init__(
+        self,
+        coordinator: EzvizDataUpdateCoordinator,
+        serial: str,
+    ) -> None:
+        """Initialize the latest-recording button."""
+        super().__init__(coordinator, serial)
+        self._attr_unique_id = f"{serial}_download_recording"
+
+    @override
+    async def async_press(self) -> None:
+        """Fetching a recording wakes the camera and can take a while."""
+        camera = find_camera(self.hass, self._serial)
+        if camera is None:
+            raise HomeAssistantError(f"The camera {self._serial} is not available")
+        try:
+            await async_download_latest(self.hass, camera)
+        except RecordingError as err:
+            raise HomeAssistantError(str(err)) from err

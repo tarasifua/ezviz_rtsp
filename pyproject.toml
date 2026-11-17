@@ -1,11 +1,16 @@
 [project]
 name = "ezviz-rtsp"
-version = "1.6.0"
+version = "1.7.0"
 description = "Home Assistant integration for live view of EZVIZ cameras through the EZVIZ cloud, including battery cameras without RTSP"
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "Apache-2.0" }
-dependencies = ["pyezvizapi==1.0.5.0"]
+dependencies = [
+    "paho-mqtt>=2.0",
+    "pycryptodome>=3.6.6",
+    "tzdata>=2024.1",
+    "xmltodict>=0.13",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -19,3 +24,6 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# The bundled pyezvizapi is third-party code, kept byte-for-byte except for its
+# import root; it is not linted as part of this integration.
+exclude = ["custom_components/ezviz_rtsp/pyezvizapi"]

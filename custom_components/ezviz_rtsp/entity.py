@@ -23,31 +23,40 @@ class EzvizEntity(CoordinatorEntity[EzvizDataUpdateCoordinator], Entity):
         """Initialize the entity."""
         super().__init__(coordinator)
         self._serial = serial
-        self._camera_name = self.data["name"]
+        camera = self.data
+        self._camera_name = camera.get("name")
 
         connections = set()
-        if mac_address := self.data["mac_address"]:
+        if mac_address := camera.get("mac_address"):
             connections.add((CONNECTION_NETWORK_MAC, mac_address))
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
             connections=connections,
             manufacturer=MANUFACTURER,
-            model=self.data["device_sub_category"],
-            name=self.data["name"],
-            sw_version=self.data["version"],
+            model=camera.get("device_sub_category"),
+            name=camera.get("name"),
+            sw_version=camera.get("version"),
         )
 
     @property
     def data(self) -> dict[str, Any]:
-        """Return coordinator data for this entity."""
-        return self.coordinator.data[self._serial]
+        """The coordinator's data for this camera, empty if it left the account.
+
+        An entity is not removed when its camera disappears between two polls,
+        so an empty mapping keeps every later read from raising a ``KeyError``
+        on each coordinator update.
+        """
+        return (self.coordinator.data or {}).get(self._serial) or {}
 
     @property
     @override
     def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.data["status"] != 2
+        """Return True while the camera is in the account, online and fresh."""
+        camera = self.data
+        if not camera or not self.coordinator.last_update_success:
+            return False
+        return camera.get("status") != 2
 
 
 class EzvizBaseEntity(Entity):
@@ -63,28 +72,32 @@ class EzvizBaseEntity(Entity):
         """Initialize the entity."""
         self._serial = serial
         self.coordinator = coordinator
-        self._camera_name = self.data["name"]
+        camera = self.data
+        self._camera_name = camera.get("name")
 
         connections = set()
-        if mac_address := self.data["mac_address"]:
+        if mac_address := camera.get("mac_address"):
             connections.add((CONNECTION_NETWORK_MAC, mac_address))
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
             connections=connections,
             manufacturer=MANUFACTURER,
-            model=self.data["device_sub_category"],
-            name=self.data["name"],
-            sw_version=self.data["version"],
+            model=camera.get("device_sub_category"),
+            name=camera.get("name"),
+            sw_version=camera.get("version"),
         )
 
     @property
     def data(self) -> dict[str, Any]:
-        """Return coordinator data for this entity."""
-        return self.coordinator.data[self._serial]
+        """The coordinator's data for this camera, empty if it left the account."""
+        return (self.coordinator.data or {}).get(self._serial) or {}
 
     @property
     @override
     def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.data["status"] != 2
+        """Return True while the camera is in the account, online and fresh."""
+        camera = self.data
+        if not camera or not self.coordinator.last_update_success:
+            return False
+        return camera.get("status") != 2

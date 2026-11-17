@@ -69,4 +69,4 @@ class EzvizBinarySensor(EzvizEntity, BinarySensorEntity):
     @override
     def is_on(self) -> bool:
         """Return the state of the sensor."""
-        return self.data[self._sensor_name]
+        return self.data.get(self._sensor_name)

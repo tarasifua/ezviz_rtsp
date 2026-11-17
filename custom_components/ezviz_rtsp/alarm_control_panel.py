@@ -15,11 +15,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from pyezvizapi import PyEzvizError
-from pyezvizapi.constants import DefenseModeType
 
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
+from .pyezvizapi import PyEzvizError
+from .pyezvizapi.constants import DefenseModeType
 
 _LOGGER = logging.getLogger(__name__)
 

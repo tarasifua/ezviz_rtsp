@@ -11,11 +11,11 @@ from homeassistant.components.switch import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from pyezvizapi.constants import DeviceSwitchType, SupportExt
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
+from .pyezvizapi.constants import DeviceSwitchType, SupportExt
+from .pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -133,7 +133,7 @@ class EzvizSwitch(EzvizEntity, SwitchEntity):
             f"{serial}_{self._camera_name}.{DeviceSwitchType(switch_number).name}"
         )
         self.entity_description = SWITCH_TYPES[switch_number]
-        self._attr_is_on = self.data["switches"][switch_number]
+        self._attr_is_on = self.data.get("switches", {}).get(switch_number)
 
     @override
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -171,5 +171,9 @@ class EzvizSwitch(EzvizEntity, SwitchEntity):
     @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._attr_is_on = self.data["switches"].get(self._switch_number)
+        data = self.data
+        # A camera that left the account has no data: keep the last known state
+        # and let ``available`` mark the entity unavailable, rather than raising.
+        if data:
+            self._attr_is_on = data.get("switches", {}).get(self._switch_number)
         super()._handle_coordinator_update()

@@ -10,11 +10,11 @@ from homeassistant.util.percentage import (
     percentage_to_ranged_value,
     ranged_value_to_percentage,
 )
-from pyezvizapi.constants import DeviceCatagories, DeviceSwitchType, SupportExt
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
+from .pyezvizapi.constants import DeviceCatagories, DeviceSwitchType, SupportExt
+from .pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 PARALLEL_UPDATES = 1
 BRIGHTNESS_RANGE = (1, 255)
@@ -52,15 +52,17 @@ class EzvizLight(EzvizEntity, LightEntity):
         """Initialize the light."""
         super().__init__(coordinator, serial)
         self.battery_cam_type = bool(
-            self.data["device_category"]
+            self.data.get("device_category")
             == DeviceCatagories.BATTERY_CAMERA_DEVICE_CATEGORY.value
         )
         self._attr_unique_id = f"{serial}_Light"
-        self._attr_is_on = self.data["switches"][DeviceSwitchType.ALARM_LIGHT.value]
+        self._attr_is_on = self.data.get("switches", {}).get(
+            DeviceSwitchType.ALARM_LIGHT.value
+        )
         self._attr_brightness = round(
             percentage_to_ranged_value(
                 BRIGHTNESS_RANGE,
-                self.coordinator.data[self._serial]["alarm_light_luminance"],
+                self.data.get("alarm_light_luminance") or 0,
             )
         )
 
@@ -91,7 +93,7 @@ class EzvizLight(EzvizEntity, LightEntity):
 
         except (HTTPError, PyEzvizError) as err:
             raise HomeAssistantError(
-                f"Failed to turn on light {self._attr_name}"
+                f"Failed to turn on light {self.name}"
             ) from err
 
     @override
@@ -109,21 +111,26 @@ class EzvizLight(EzvizEntity, LightEntity):
 
         except (HTTPError, PyEzvizError) as err:
             raise HomeAssistantError(
-                f"Failed to turn off light {self._attr_name}"
+                f"Failed to turn off light {self.name}"
             ) from err
 
     @callback
     @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._attr_is_on = self.data["switches"].get(DeviceSwitchType.ALARM_LIGHT.value)
-
-        if isinstance(self.data["alarm_light_luminance"], int):
-            self._attr_brightness = round(
-                percentage_to_ranged_value(
-                    BRIGHTNESS_RANGE,
-                    self.data["alarm_light_luminance"],
-                )
+        data = self.data
+        # A camera that left the account has no data: keep the last known state
+        # and let ``available`` mark the entity unavailable, rather than raising.
+        if data:
+            self._attr_is_on = data.get("switches", {}).get(
+                DeviceSwitchType.ALARM_LIGHT.value
             )
+            if isinstance(data.get("alarm_light_luminance"), int):
+                self._attr_brightness = round(
+                    percentage_to_ranged_value(
+                        BRIGHTNESS_RANGE,
+                        data["alarm_light_luminance"],
+                    )
+                )
 
         super()._handle_coordinator_update()

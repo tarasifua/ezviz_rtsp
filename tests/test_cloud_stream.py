@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import time
 import types
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
-from pyezvizapi.exceptions import PyEzvizError
 
 from custom_components.ezviz_rtsp import live
 from custom_components.ezviz_rtsp.cloud_stream import (
@@ -28,6 +28,11 @@ from custom_components.ezviz_rtsp.live import (
     card_mjpeg_path,
     stream_source,
     uses_cloud_stream,
+)
+from custom_components.ezviz_rtsp.pyezvizapi.exceptions import PyEzvizError
+from custom_components.ezviz_rtsp.recordings import (
+    DATA_RECORDINGS,
+    RecordingStore,
 )
 
 # --- MPEG-PS building blocks (borrowed shapes from real EZVIZ captures) --------
@@ -251,6 +256,67 @@ async def test_powered_stream_has_no_hard_limit(upstream) -> None:
     assert stream._deadline is None
     await frames.aclose()
     await stream.async_close()
+
+
+async def test_a_live_start_waits_for_the_sd_card(upstream, tmp_path) -> None:
+    # A clip download (or a day read) holds the camera: the live view waits for
+    # it instead of opening a second session EZVIZ would refuse.
+    store = RecordingStore(tmp_path / "media", UTC)
+    hass = _hass()
+    hass.data[DATA_RECORDINGS] = store
+    stream = LiveStream(hass, _coordinator(), "BK1", 1, lambda: None)
+    holder = store.lock("BK1")
+    await holder.acquire()
+    frames = stream.frames()
+    pending = asyncio.ensure_future(anext(frames))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert stream.waiting is True, "the card can say the live view is waiting"
+    assert upstream.opens == 0, "the camera is not woken while the SD card is read"
+
+    holder.release()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert stream.waiting is False
+    assert upstream.opens == 1, "the stream opens once the download has finished"
+    upstream.queue.put_nowait(IMKH + KEY + PACK)
+    assert await pending == KEY
+    await frames.aclose()
+    await stream.async_close()
+
+
+def test_a_live_start_without_a_clip_download_does_not_wait(upstream, tmp_path) -> None:
+    store = RecordingStore(tmp_path / "media", UTC)
+    hass = _hass()
+    hass.data[DATA_RECORDINGS] = store
+    stream = LiveStream(hass, _coordinator(), "BK1", 1, lambda: None)
+
+    assert stream.waiting is False
+
+
+async def test_cancelling_a_waiting_live_start_clears_the_flag(upstream, tmp_path) -> None:
+    store = RecordingStore(tmp_path / "media", UTC)
+    hass = _hass()
+    hass.data[DATA_RECORDINGS] = store
+    stream = LiveStream(hass, _coordinator(), "BK1", 1, lambda: None)
+    holder = store.lock("BK1")
+    await holder.acquire()
+    frames = stream.frames()
+    pending = asyncio.ensure_future(anext(frames))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert stream.waiting is True
+
+    await stream.async_close()
+    with pytest.raises(StopAsyncIteration):
+        await pending
+    holder.release()
+
+    assert stream.waiting is False
+    assert upstream.opens == 0, "a cancelled wait never wakes the camera"
+    await frames.aclose()
 
 
 def test_linger_defaults_and_is_configurable() -> None:
@@ -477,8 +543,11 @@ def test_setup_live_streams_registers_view_and_builds_a_stream_per_camera() -> N
     entry = MagicMock(options={})
     async_setup_live_streams(hass, entry, coordinator)
     assert set(coordinator.live_streams) == {"BK1", "BK2"}
-    # The MPEG-TS view, the public MJPEG view and the card's authenticated view.
-    assert hass.http.register_view.call_count == 3
+    # The MPEG-TS view, the public MJPEG view, the card's authenticated view and
+    # the recordings card's clip view.
+    assert hass.http.register_view.call_count == 4
+    views = {type(call.args[0]).__name__ for call in hass.http.register_view.call_args_list}
+    assert "RecordingClipView" in views
     # A random token is persisted so other apps' addresses survive a restart.
     stored = hass.config_entries.async_update_entry.call_args.kwargs["options"]["stream_token"]
     assert {s.token for s in coordinator.live_streams.values()} == {stored}
@@ -586,11 +655,11 @@ def test_camera_uses_the_cloud_stream_without_rtsp() -> None:
 
 
 def test_battery_camera_is_detected() -> None:
-    from custom_components.ezviz_rtsp.camera import _is_battery_camera
+    from custom_components.ezviz_rtsp.live import is_battery_camera
 
-    assert _is_battery_camera({"battery_level": 52})
-    assert _is_battery_camera({"battery_camera_work_mode": 5})
-    assert not _is_battery_camera({"local_ip": "1.2.3.4"})
+    assert is_battery_camera({"battery_level": 52})
+    assert is_battery_camera({"battery_camera_work_mode": 5})
+    assert not is_battery_camera({"local_ip": "1.2.3.4"})
 
 
 def _cloud_camera(coordinator, hass) -> object:
@@ -691,12 +760,25 @@ async def test_options_menu_and_video_step() -> None:
         "stream",
         "release",
         "snapshots",
+        "recordings",
         "stream_address",
         "video",
         "codes",
     ]
     result = await flow.async_step_video({"transcode": True})
     assert result["data"]["transcode"] is True
+
+
+async def test_options_recordings_step_sets_retention() -> None:
+    flow, entry = _options_flow({})
+    entry.options = {"linger": 5}
+    form = await flow.async_step_recordings()
+    assert form["type"] == "form"
+    assert form["step_id"] == "recordings"
+    result = await flow.async_step_recordings({"recordings_keep_days": 30})
+    assert result["data"]["recordings_keep_days"] == 30
+    # Other options are kept.
+    assert result["data"]["linger"] == 5
 
 
 async def test_options_stream_address_step_shows_addresses_and_rotates() -> None:

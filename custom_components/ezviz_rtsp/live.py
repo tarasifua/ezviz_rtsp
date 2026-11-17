@@ -18,9 +18,9 @@ import contextlib
 import hmac
 import logging
 import secrets
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 from homeassistant.core import HomeAssistant
@@ -31,7 +31,6 @@ from .cloud_stream import (
     LiveSource,
     PackSplitter,
     async_iter_payloads,
-    async_ps_to_jpeg,
     decrypt_packs,
 )
 from .const import (
@@ -45,8 +44,11 @@ from .const import (
     DATA_LIVE_VIEW,
     DOMAIN,
 )
+from .recordings import RecordingClipView, async_wait_for_camera
 
 if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+
     from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,11 +66,6 @@ MAX_SESSION = 300
 
 # A reader this far behind (about 30 s of video) is dropped instead of buffered.
 _MAX_BACKLOG = 450
-# A snapshot reads at most this long past its window before giving up on a stalled stream.
-_STALL_MARGIN = 30
-# A snapshot reads this much from the keyframe on: the keyframe itself is enough.
-_PHOTO_SECONDS = 1
-_PHOTO_BYTES = 700_000
 
 # The card's fast path: the cloud stream encoded straight to JPEG for a browser
 # <img>. Smaller and slower than the video, but it appears in a few seconds
@@ -124,6 +121,9 @@ class LiveStream:
         self._cooldown_until = 0.0
         # Whether the current open has handed a keyframe to its readers.
         self._video = False
+        # Whether the open is waiting for a clip download or an SD read to end
+        # before it may wake the camera. The card shows this in its status.
+        self.waiting = False
         # Called when an open ends without video (the live camera stops HA's stream worker).
         self.on_no_video: Callable[[], None] | None = None
         self.codec = "hevc"
@@ -170,18 +170,23 @@ class LiveStream:
                 "The camera did not stream a moment ago; try again later"
             )
         queue: asyncio.Queue[_Item] = asyncio.Queue()
-        self._readers.add(queue)
-        if self._linger is not None:
-            self._linger.cancel()
-            self._linger = None
-        if self._task is None:
-            if self.battery and self._max_session > 0 and self._deadline is None:
-                self._deadline = loop.call_later(self._max_session, self._session_timeout)
-            self._task = self._hass.async_create_background_task(
-                self._run(), f"{DOMAIN} live {self.serial}"
-            )
         started = False
+        # Everything from the reader's registration on is inside the try: if
+        # starting the background task raises (Home Assistant is shutting down),
+        # the finally still takes the queue back out of ``_readers``.
         try:
+            self._readers.add(queue)
+            if self._linger is not None:
+                self._linger.cancel()
+                self._linger = None
+            if self._task is None:
+                if self.battery and self._max_session > 0 and self._deadline is None:
+                    self._deadline = loop.call_later(
+                        self._max_session, self._session_timeout
+                    )
+                self._task = self._hass.async_create_background_task(
+                    self._run(), f"{DOMAIN} live {self.serial}"
+                )
             while True:
                 item = await queue.get()
                 if isinstance(item, Exception):
@@ -223,6 +228,34 @@ class LiveStream:
         if self.on_no_video is not None:
             self.on_no_video()
 
+    async def async_stop(self) -> bool:
+        """Close the stream now, without waiting for the release delay.
+
+        The session is normally held open for the linger time, so a quick
+        re-open does not wake the camera again. SD-card playback needs the
+        camera to itself, so the card asks for the session to go at once.
+        """
+        if self._linger is not None:
+            self._linger.cancel()
+            self._linger = None
+        if self._deadline is not None:
+            self._deadline.cancel()
+            self._deadline = None
+        if (task := self._task) is None:
+            return False
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        # A task cancelled before it ran never told its readers. Forget it only
+        # if it is still ours: a new reader may have started another task while
+        # this one was being awaited, and that one must stay tracked.
+        if self._task is task:
+            self._task = None
+        for queue in self._readers:
+            queue.put_nowait(None)
+        _LOGGER.info("Live view of %s stopped (the camera is needed elsewhere)", self.serial)
+        return True
+
     async def async_close(self) -> None:
         """Close the stream now (the entry is unloading)."""
         if self._linger is not None:
@@ -235,8 +268,10 @@ class LiveStream:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            # A task cancelled before it ran never told its readers.
-            self._task = None
+            # A task cancelled before it ran never told its readers. Forget it
+            # only if it is still the one we cancelled.
+            if self._task is task:
+                self._task = None
             for queue in self._readers:
                 queue.put_nowait(None)
 
@@ -246,6 +281,14 @@ class LiveStream:
         end: _Item = None
         started = False
         try:
+            # A clip download or a day read holds the camera, and EZVIZ refuses a
+            # stream while the SD card is being read. Wait for it to finish (the
+            # card shows that it is waiting) instead of failing the live view.
+            self.waiting = True
+            try:
+                await async_wait_for_camera(self._hass, self.serial)
+            finally:
+                self.waiting = False
             client = self._coordinator.ezviz_client
             _LOGGER.debug("Opening the EZVIZ cloud stream of %s", self.serial)
             source = LiveSource(client, self.serial, self.channel)
@@ -284,6 +327,12 @@ class LiveStream:
         except asyncio.CancelledError:
             closed = True  # on purpose; a linger stop without video already cooled down
             raise
+        except Exception as err:
+            # Anything unexpected (the pack splitter, a decoder) would otherwise
+            # leave the readers with a plain end: no error to show and no
+            # cooldown, so the camera would be woken again at once.
+            _LOGGER.exception("Live stream of %s failed", self.serial)
+            end = EzvizStreamError(str(err) or type(err).__name__)
         finally:
             self._task = None
             if self._deadline is not None:
@@ -304,33 +353,6 @@ class LiveStream:
                 queue.put_nowait(EzvizStreamError("Reader fell behind the live stream"))
             else:
                 queue.put_nowait(item)
-
-
-async def async_read(stream: LiveStream, seconds: float, max_bytes: int) -> bytes:
-    """Read ``seconds`` of the shared stream from its next keyframe, capped at ``max_bytes``."""
-    loop = asyncio.get_running_loop()
-    buffer = bytearray()
-    end: float | None = None
-    try:
-        async with asyncio.timeout(seconds + _STALL_MARGIN):
-            async with contextlib.aclosing(stream.frames()) as frames:
-                async for data in frames:
-                    buffer += data
-                    end = end or loop.time() + seconds
-                    if loop.time() >= end or len(buffer) >= max_bytes:
-                        break
-    except TimeoutError as err:
-        if not buffer:
-            raise EzvizStreamError("No video received; the camera may be asleep") from err
-    if not buffer:
-        raise EzvizStreamError("The stream ended before its first keyframe")
-    return bytes(buffer)
-
-
-async def async_grab_jpeg(hass: HomeAssistant, stream: LiveStream) -> bytes:
-    """A still of the shared live stream: its next keyframe."""
-    ps = await async_read(stream, _PHOTO_SECONDS, _PHOTO_BYTES)
-    return await async_ps_to_jpeg(ps, ffmpeg_binary(hass))
 
 
 def ffmpeg_binary(hass: HomeAssistant) -> str:
@@ -386,9 +408,10 @@ async def _pipe_frames(
     except ConnectionError:
         pass  # the reader left
     finally:
+        # gather never raises: a feeder that already failed on its own must not
+        # mask the reason the client left.
         feeder.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await feeder
+        await asyncio.gather(feeder, return_exceptions=True)
         if proc.returncode is None:
             proc.kill()
         await proc.wait()
@@ -540,13 +563,38 @@ def card_mjpeg_path(serial: str) -> str:
     return f"/api/{DOMAIN}/card/{serial}"
 
 
-def uses_cloud_stream(hass: HomeAssistant, serial: str) -> bool:
-    """Whether a camera plays through the cloud (it has no local RTSP entry)."""
+def rtsp_entry(hass: HomeAssistant, serial: str) -> ConfigEntry | None:
+    """The camera's own (non-ignored) RTSP config entry, if it has one.
+
+    One camera's serial can appear in more than one entry (a cloud entry and a
+    local RTSP one); only the non-ignored entry means the camera has local RTSP.
+    """
     from homeassistant.config_entries import SOURCE_IGNORE
 
-    return not any(
-        entry.unique_id == serial and entry.source != SOURCE_IGNORE
-        for entry in hass.config_entries.async_entries(DOMAIN)
+    return next(
+        (
+            entry
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if entry.unique_id == serial and entry.source != SOURCE_IGNORE
+        ),
+        None,
+    )
+
+
+def uses_cloud_stream(hass: HomeAssistant, serial: str) -> bool:
+    """Whether a camera plays through the cloud (it has no local RTSP entry)."""
+    return rtsp_entry(hass, serial) is None
+
+
+def is_battery_camera(data: Mapping[str, Any]) -> bool:
+    """Whether a camera runs on battery (no local RTSP, sleeps between wakes).
+
+    EZVIZ reports a battery level or a battery work mode for these; they expose
+    no RTSP server, so the local ``rtsp://`` source can never play them.
+    """
+    return (
+        data.get("battery_level") is not None
+        or data.get("battery_camera_work_mode") is not None
     )
 
 
@@ -564,6 +612,7 @@ def async_setup_live_streams(
         hass.http.register_view(LiveStreamView())
         hass.http.register_view(LiveMjpegView())
         hass.http.register_view(LiveCardMjpegView())
+        hass.http.register_view(RecordingClipView())
 
     options = dict(entry.options)
     token = options.get(CONF_STREAM_TOKEN)
@@ -603,10 +652,7 @@ def async_setup_live_streams(
 
         # A battery camera gets a hard session cap, so it can never be left
         # streaming and draining (see LiveStream.battery / max_session).
-        battery = (
-            value.get("battery_level") is not None
-            or value.get("battery_camera_work_mode") is not None
-        )
+        battery = is_battery_camera(value)
         coordinator.live_streams[serial] = LiveStream(
             hass,
             coordinator,

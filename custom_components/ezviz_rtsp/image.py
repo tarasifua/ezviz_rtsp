@@ -12,12 +12,12 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 from propcache.api import cached_property
-from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.utils import decrypt_image
 
 from .const import DOMAIN, SIGNAL_PICTURE_CAPTURED
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
+from .pyezvizapi.exceptions import PyEzvizError
+from .pyezvizapi.utils import decrypt_image
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class EzvizLastMotion(EzvizEntity, ImageEntity):
             return None
         if response := await self._fetch_url(url):
             image_data = response.content
-            if self.data["encrypted"] and self.alarm_image_password is not None:
+            if self.data.get("encrypted") and self.alarm_image_password is not None:
                 try:
                     image_data = decrypt_image(
                         response.content, self.alarm_image_password

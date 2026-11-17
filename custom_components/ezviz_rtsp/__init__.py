@@ -1,5 +1,6 @@
 """Support for EZVIZ camera."""
 
+import asyncio
 import hashlib
 import logging
 from pathlib import Path
@@ -12,14 +13,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import async_get_integration
-from pyezvizapi.client import EzvizClient
-from pyezvizapi.exceptions import (
-    EzvizAuthTokenExpired,
-    EzvizAuthVerificationCode,
-    HTTPError,
-    InvalidURL,
-    PyEzvizError,
-)
 
 from .const import (
     ATTR_TYPE_CAMERA,
@@ -30,6 +23,8 @@ from .const import (
     CONF_RFSESSION_ID,
     CONF_SESSION_ID,
     DATA_CARD,
+    DATA_CARD_LOCK,
+    DATA_CARD_PATHS,
     DEFAULT_FFMPEG_ARGUMENTS,
     DEFAULT_TIMEOUT,
     DOMAIN,
@@ -38,6 +33,15 @@ from .const import (
 )
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .live import async_close_live_streams, async_setup_live_streams
+from .pyezvizapi.client import EzvizClient
+from .pyezvizapi.exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizAuthVerificationCode,
+    HTTPError,
+    InvalidURL,
+    PyEzvizError,
+)
+from .recordings import async_close_store, async_setup_recordings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,32 +66,41 @@ PLATFORMS_BY_TYPE: dict[str, list] = {
 
 async def _async_register_card(hass: HomeAssistant) -> None:
     """Serve the Lovelace card and register its websocket command, once."""
-    if hass.data.get(DATA_CARD):
-        return
-    hass.data[DATA_CARD] = True
+    lock: asyncio.Lock = hass.data.setdefault(DATA_CARD_LOCK, asyncio.Lock())
+    async with lock:
+        if hass.data.get(DATA_CARD):
+            return
 
-    frontend = Path(__file__).parent / "frontend"
-    card = frontend / CARD_FILENAME
-    hls = frontend / HLS_FILENAME
-    content = await hass.async_add_executor_job(card.read_bytes)
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(CARD_URL, str(card), True),
-            StaticPathConfig(HLS_URL, str(hls), True),
-        ]
-    )
-    # The file is served with a long cache, so the URL carries a hash of its
-    # content: any change to the card reaches browsers on the next page load.
-    # The integration version rides along, so the card can print it in the
-    # console and it can never drift from the manifest.
-    integration = await async_get_integration(hass, DOMAIN)
-    version = integration.version or "?"
-    query = f"v={hashlib.sha256(content).hexdigest()[:12]}&version={version}"
-    add_extra_js_url(hass, f"{CARD_URL}?{query}")
+        frontend = Path(__file__).parent / "frontend"
+        card = frontend / CARD_FILENAME
+        hls = frontend / HLS_FILENAME
+        content = await hass.async_add_executor_job(card.read_bytes)
+        if not hass.data.get(DATA_CARD_PATHS):
+            # aiohttp refuses a route registered twice, so a retry after a later
+            # failure must not add the static paths again.
+            await hass.http.async_register_static_paths(
+                [
+                    StaticPathConfig(CARD_URL, str(card), True),
+                    StaticPathConfig(HLS_URL, str(hls), True),
+                ]
+            )
+            hass.data[DATA_CARD_PATHS] = True
+        # The file is served with a long cache, so the URL carries a hash of its
+        # content: any change to the card reaches browsers on the next page load.
+        # The integration version rides along, so the card can print it in the
+        # console and it can never drift from the manifest.
+        integration = await async_get_integration(hass, DOMAIN)
+        version = integration.version or "?"
+        query = f"v={hashlib.sha256(content).hexdigest()[:12]}&version={version}"
+        add_extra_js_url(hass, f"{CARD_URL}?{query}")
 
-    from .websocket import async_register_commands
+        from .websocket import async_register_commands
 
-    async_register_commands(hass)
+        async_register_commands(hass)
+        # Only now that everything is in place: a failure above must let the next
+        # setup try again, instead of leaving the card and its commands missing
+        # for the rest of the run.
+        hass.data[DATA_CARD] = True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: EzvizConfigEntry) -> bool:
@@ -139,6 +152,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: EzvizConfigEntry) -> boo
         async_setup_live_streams(hass, entry, coordinator)
         # Ship the card that plays those streams.
         await _async_register_card(hass)
+        # Sweep the downloaded clips now, and once a day while we run.
+        await async_setup_recordings(hass)
 
     # Check EZVIZ cloud account entity is present, reload
     # cloud account entities for camera entity change
@@ -183,6 +198,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: EzvizConfigEntry) -> bo
     if sensor_type == ATTR_TYPE_CLOUD:
         await async_close_live_streams(entry.runtime_data)
 
-    return await hass.config_entries.async_unload_platforms(
+    unloaded = await hass.config_entries.async_unload_platforms(
         entry, PLATFORMS_BY_TYPE[sensor_type]
     )
+    if unloaded and sensor_type == ATTR_TYPE_CLOUD and not any(
+        other.entry_id != entry.entry_id and other.data.get(CONF_TYPE) == ATTR_TYPE_CLOUD
+        for other in hass.config_entries.async_loaded_entries(DOMAIN)
+    ):
+        # The last account is going: forget the day lists. Downloaded clips stay
+        # in the media folder until their retention sweeps them.
+        await async_close_store(hass)
+    return unloaded

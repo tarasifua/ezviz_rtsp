@@ -79,6 +79,9 @@
       },
       "request_snapshot": {
         "name": "Request snapshot"
+      },
+      "download_recording": {
+        "name": "Download latest recording"
       }
     },
     "image": {
@@ -122,6 +125,9 @@
     "sensor": {
       "alarm_sound_mod": {
         "name": "Alarm sound level"
+      },
+      "latest_recording": {
+        "name": "Latest recording"
       },
       "last_alarm_time": {
         "name": "Last alarm time"
@@ -203,6 +209,7 @@
           "general": "General",
           "release": "Release the camera after",
           "snapshots": "Snapshots",
+          "recordings": "Downloaded recordings",
           "stream": "Maximum stream duration",
           "video": "Video transcoding",
           "stream_address": "Stream address for other apps"
@@ -231,6 +238,16 @@
         "description": "Only cameras with video encryption turned on need a code. It decrypts the cloud live stream inside Home Assistant, so it never reaches a browser. Cameras marked ✓ already have one.",
         "title": "Verification codes"
       },
+      "recordings": {
+        "data": {
+          "recordings_keep_days": "Keep downloaded recordings for (days)"
+        },
+        "data_description": {
+          "recordings_keep_days": "A recording the card plays is saved as an MP4 under Home Assistant's media folder (media/ezviz_rtsp). The clips of this account's cameras older than this many days are deleted; 0 keeps them until you remove them yourself. Each account has its own setting."
+        },
+        "description": "Recordings you play in the card are downloaded once and kept under Home Assistant's media folder, so seeking and playing them again do not wake the camera. This is how long this account's clips stay.",
+        "title": "Downloaded recordings"
+      },
       "video": {
         "data": {
           "transcode": "Re-encode the cloud live stream to H.264"
@@ -247,10 +264,10 @@
           "snapshot_interval": "Minimum time between automatic snapshots"
         },
         "data_description": {
-          "auto_snapshot": "Lets the EZVIZ Snapshot card, and the EZVIZ Video card with capture_on_load: true, take a new picture each time it comes into view (dashboard opened, tab or app back in front). Each picture wakes a battery camera. Buttons, the video card's snapshot chip and scripts that call capture_picture are not affected.",
+          "auto_snapshot": "Lets the EZVIZ Video card with capture_on_load: true take a new picture each time it comes into view (dashboard opened, tab or app back in front). Each picture wakes a battery camera. Buttons, the card's snapshot chip and scripts that call capture_picture are not affected.",
           "snapshot_interval": "An automatic snapshot of a camera is skipped if it took a picture less than this long ago, in seconds, however many dashboards ask. 0 takes one on every view."
         },
-        "description": "Automatic snapshots from the EZVIZ Snapshot card and the EZVIZ Video card's capture_on_load. A camera is woken for each picture, so keep the interval long enough for battery cameras.",
+        "description": "Automatic snapshots from the EZVIZ Video card's capture_on_load. A camera is woken for each picture, so keep the interval long enough for battery cameras.",
         "title": "Snapshots"
       },
       "stream": {
@@ -301,6 +318,16 @@
         }
       },
       "name": "Capture picture"
+    },
+    "download_recording": {
+      "description": "Finds the camera's newest SD-card recording (today, or yesterday when today has none), downloads it through the EZVIZ cloud and saves it as an MP4 under the media folder (media/ezviz_rtsp). Wakes battery cameras. Returns the file's path and interval.",
+      "fields": {
+        "format": {
+          "description": "The video format to save: h264 (converted, plays everywhere) or hevc (the camera's own, only repackaged).",
+          "name": "Format"
+        }
+      },
+      "name": "Download latest recording"
     },
     "set_alarm_detection_sensibility": {
       "description": "Changes the sensibility level of the motion detection.",

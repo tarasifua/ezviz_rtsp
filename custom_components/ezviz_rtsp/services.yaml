@@ -20,6 +20,21 @@ capture_picture:
           mode: box
           unit_of_measurement: s
 
+download_recording:
+  target:
+    entity:
+      integration: ezviz_rtsp
+      domain: camera
+  fields:
+    format:
+      required: false
+      default: h264
+      selector:
+        select:
+          options:
+            - h264
+            - hevc
+
 set_alarm_detection_sensibility:
   target:
     entity:

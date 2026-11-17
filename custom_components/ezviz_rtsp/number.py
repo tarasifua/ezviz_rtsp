@@ -10,17 +10,17 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from pyezvizapi.constants import SupportExt
-from pyezvizapi.exceptions import (
+
+from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
+from .entity import EzvizBaseEntity
+from .pyezvizapi.constants import SupportExt
+from .pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
     HTTPError,
     InvalidURL,
     PyEzvizError,
 )
-
-from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
-from .entity import EzvizBaseEntity
 
 SCAN_INTERVAL = timedelta(seconds=3600)
 PARALLEL_UPDATES = 0
@@ -124,9 +124,9 @@ class EzvizNumber(EzvizBaseEntity, NumberEntity):
 
         except EzvizAuthTokenExpired, EzvizAuthVerificationCode:
             _LOGGER.debug("Failed to login to EZVIZ API")
-            self.hass.async_create_task(
-                self.hass.config_entries.async_reload(self.config_entry_id)
-            )
+            # Runs in the executor (async_device_update): add_job is the
+            # thread-safe way to reach the loop, async_create_task is not.
+            self.hass.add_job(self.hass.config_entries.async_reload, self.config_entry_id)
             return
 
         except (InvalidURL, HTTPError, PyEzvizError) as error:
