@@ -17,6 +17,8 @@
 //   show_timestamp: false  # optional; show the picture's date and time
 //   show_battery: true     # optional; false hides the battery level
 //   hide_recordings: false # optional; hide the recordings button
+//   format: auto           # optional; recordings format: auto, h264 or hevc
+//   max_height: 360        # optional; height of the recordings list in pixels
 //   save_recordings: true  # optional; false keeps watched clips out of media
 //
 // The card shows the camera's live picture from the integration's own stream:
@@ -113,6 +115,13 @@ const STRINGS = /* translations */ {
     "show_timestamp": "Show the picture date and time",
     "show_battery": "Show the battery level",
     "hide_recordings": "Hide the recordings button",
+    "format": "Recording format",
+    "format_helper": "Auto asks for the camera's own HEVC when the browser can play it, and for H.264 otherwise; a clip that fails to play is retried in H.264.",
+    "format_auto": "Auto (follow the browser)",
+    "format_h264": "H.264 (plays everywhere)",
+    "format_hevc": "HEVC (the camera's own, quicker)",
+    "max_height": "Recordings list height (px)",
+    "max_height_helper": "How tall the scrolling recordings list is, in pixels.",
     "save_recordings": "Save watched recordings",
     "save_recordings_helper": "Keep the clips you play in the media folder. When off, a watched recording is downloaded to a temporary folder, deleted after about two hours, and never appears under Media.",
     "section_camera": "Camera",
@@ -183,6 +192,13 @@ const STRINGS = /* translations */ {
     "show_timestamp": "Показувати дату й час знімка",
     "show_battery": "Показувати заряд батареї",
     "hide_recordings": "Приховати кнопку записів",
+    "format": "Формат запису",
+    "format_helper": "«Авто» просить власний HEVC камери, коли браузер його відтворює, і H.264 в іншому разі; кліп, який не відтворився, повторюється в H.264.",
+    "format_auto": "Авто (за браузером)",
+    "format_h264": "H.264 (відтворюється всюди)",
+    "format_hevc": "HEVC (власний формат камери, швидше)",
+    "max_height": "Висота списку записів (px)",
+    "max_height_helper": "Якої висоти список записів із прокруткою, у пікселях.",
     "save_recordings": "Зберігати переглянуті записи",
     "save_recordings_helper": "Зберігати відтворені кліпи в media. Якщо вимкнено, запис тимчасово завантажується, видаляється приблизно через дві години й не зʼявляється в Media.",
     "section_camera": "Камера",
@@ -250,6 +266,8 @@ const CARD_DEFAULTS = {
   show_timestamp: false,
   show_battery: true,
   hide_recordings: false,
+  format: "auto",
+  max_height: 360,
   save_recordings: true,
 };
 
@@ -1729,7 +1747,8 @@ class EzvizVideoCard extends HTMLElement {
 
     const list = document.createElement("div");
     list.className = "recList";
-    list.style.maxHeight = "360px";
+    const maxHeight = Number(this._config?.max_height);
+    list.style.maxHeight = `${Number.isFinite(maxHeight) && maxHeight > 0 ? maxHeight : 360}px`;
     list.append(this._recordingsBody());
     view.append(list);
     // Remember where the user is in the list; a render must not lose it.
@@ -1837,9 +1856,12 @@ class EzvizVideoCard extends HTMLElement {
   }
 
   // The camera records HEVC; ask for it as is when this browser can play it and
-  // for an H.264 copy otherwise. A failed HEVC playback retries once in H.264.
+  // for an H.264 copy otherwise. The card's `format` option can force one. A
+  // failed HEVC playback retries once in H.264.
   _recFormat(fallback = false) {
     if (fallback) return "h264";
+    const wanted = this._config?.format;
+    if (wanted === "hevc" || wanted === "h264") return wanted;
     return playsHevc() ? "hevc" : "h264";
   }
 
@@ -2688,8 +2710,25 @@ class EzvizVideoCardEditor extends HTMLElement {
         { name: "show_battery", selector: { boolean: {} } },
       ]),
       section("section_recordings", "mdi:filmstrip-box-multiple", [
-        { name: "hide_recordings", selector: { boolean: {} } },
+        {
+          name: "format",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "auto", label: t(lang, "format_auto") },
+                { value: "h264", label: t(lang, "format_h264") },
+                { value: "hevc", label: t(lang, "format_hevc") },
+              ],
+            },
+          },
+        },
+        {
+          name: "max_height",
+          selector: { number: { min: 120, max: 1200, mode: "box", unit_of_measurement: "px" } },
+        },
         { name: "save_recordings", selector: { boolean: {} } },
+        { name: "hide_recordings", selector: { boolean: {} } },
       ]),
     ];
     // Reuse the same <ha-form>. Lovelace calls setConfig() after every change;
@@ -2720,6 +2759,8 @@ class EzvizVideoCardEditor extends HTMLElement {
       form.computeLabel = (field) => t(lang, field.name);
       form.computeHelper = (field) => {
         if (field.name === "picture") return t(lang, "picture_helper");
+        if (field.name === "format") return t(lang, "format_helper");
+        if (field.name === "max_height") return t(lang, "max_height_helper");
         if (field.name === "save_recordings") return t(lang, "save_recordings_helper");
         return "";
       };

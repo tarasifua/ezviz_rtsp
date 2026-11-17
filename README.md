@@ -144,9 +144,9 @@ save_recordings: true  # optional; false keeps watched clips out of media
 | `max_height` | `360` | Height of the scrolling recordings list, in pixels. |
 | `save_recordings` | `true` | Keep the recordings you watch in the media folder. With `false`, a watched clip is fetched into a temporary folder, deleted after about two hours, and never appears under **Media**; one already saved earlier still plays from its permanent copy. |
 
-All of these are also in the card's **visual editor**, grouped into **Camera**,
-**Playback**, **Picture and snapshots**, **Buttons and battery** and
-**Recordings** sections with your cameras listed. By default the card does
+All of these — except `entity` — are also in the card's **visual editor**,
+grouped into **Camera**, **Playback**, **Picture and snapshots**, **Buttons and
+battery** and **Recordings** sections with your cameras listed. By default the card does
 nothing until you press play: it shows the camera's **last alarm picture** with
 a small Mushroom-style **play chip in the bottom-right corner**. Pressing it
 starts the live view, which runs for `max_seconds`; a **Stop** chip in the same

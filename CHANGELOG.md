@@ -67,6 +67,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   the month was last checked and whether the check was complete.
 
 ### Fixed
+- **The card's `format` and `max_height` options now do something.** Both were
+  documented but never read: the recordings format was always chosen from the
+  browser, and the list height was always 360 px. The card now honours both, and
+  both are in the **Recordings** section of the visual editor.
 - **A handful of integration internals are fixed.** Turning a light on or off no
   longer fails with a confusing `AttributeError` when the call itself fails (the
   message used an attribute Home Assistant never sets). A live stream that fails
