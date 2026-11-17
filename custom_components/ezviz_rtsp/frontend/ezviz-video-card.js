@@ -270,6 +270,33 @@ const CARD_DEFAULTS = {
   save_recordings: true,
 };
 
+// The picture box's shape, remembered per camera. The idle picture is the
+// camera's own frame, so its shape does not change between visits; storing it
+// lets a dashboard open at the right height instead of growing a moment later
+// when the poster loads. Browsers without localStorage (private mode) simply
+// measure every time.
+const RATIO_STORAGE_KEY = "ezviz-video-card:ratio";
+
+const readStoredRatio = (serial) => {
+  if (!serial) return null;
+  try {
+    const value = window.localStorage.getItem(`${RATIO_STORAGE_KEY}:${serial}`);
+    // Only trust a plain "w / h" shape, never a corrupt entry.
+    return /^\d{1,5} \/ \d{1,5}$/.test(value || "") ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const storeRatio = (serial, ratio) => {
+  if (!serial || !ratio) return;
+  try {
+    window.localStorage.setItem(`${RATIO_STORAGE_KEY}:${serial}`, ratio);
+  } catch {
+    /* no localStorage: the card just re-measures next time */
+  }
+};
+
 const style = /* css */ `
   :host { display: block; }
   ha-card { overflow: hidden; }
@@ -679,6 +706,9 @@ class EzvizVideoCard extends HTMLElement {
       this._mediaRatio = null;
       this._ratioProbe = null;
     }
+    // A remembered shape means the box is right from the first paint, instead
+    // of growing a moment later when the poster loads.
+    if (!this._mediaRatio) this._mediaRatio = readStoredRatio(this._config.serial);
     this._stop();
     this._state = "idle";
     this._message = "";
@@ -2208,6 +2238,8 @@ class EzvizVideoCard extends HTMLElement {
     const ratio = portrait ? "1 / 1" : `${width} / ${height}`;
     if (this._mediaRatio === ratio) return portrait;
     this._mediaRatio = ratio;
+    // Remember it, so the next visit opens at this height without a jump.
+    storeRatio(this._config?.serial, ratio);
     // Growing (or shrinking) the picture pushes whatever is below it down (up).
     // If any of that is on screen the reader sees it move - the list jumping
     // when the first clip of a session takes the camera's own shape instead of

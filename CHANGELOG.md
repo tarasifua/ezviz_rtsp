@@ -3,6 +3,15 @@
 All notable changes to **Ezviz Cloud with Video** (`ezviz_rtsp`) are listed here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **The card opens at the right height.** The picture box sat at the 16:9 default
+  until the camera's idle picture loaded a moment later, then grew to the
+  picture's own shape — a small but visible jump on every dashboard open. The
+  card now remembers each camera's shape in the browser and starts the box at
+  it, so nothing resizes after the first visit.
+
 ## [2.0.0] — 2026-11-17
 
 **Breaking:** the separate Snapshot and Recordings cards are gone (both are modes
