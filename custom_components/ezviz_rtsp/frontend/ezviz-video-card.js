@@ -4,7 +4,6 @@
 //
 //   type: custom:ezviz-video-card
 //   serial: BC1234567      # device serial; the visual editor lists your cameras
-//   entity: camera.front   # or point at the camera entity directly
 //   title: Front door      # optional; defaults to the camera's name
 //   icon: mdi:doorbell     # optional
 //   auto_play: false       # optional; play while the card is on screen
@@ -641,8 +640,8 @@ class EzvizVideoCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config || (!config.serial && !config.entity)) {
-      throw new Error("ezviz-video-card: 'serial' (or 'entity') is required");
+    if (!config || !config.serial) {
+      throw new Error("ezviz-video-card: 'serial' is required");
     }
     const previous = this._config;
     // Play, snapshots and waking the camera are all off by default: the card
@@ -661,8 +660,8 @@ class EzvizVideoCard extends HTMLElement {
     this._imagesCam = undefined;
     this._posterShown = undefined;
     // Another camera means another SD card: forget the list and the clip.
-    const was = `${previous?.serial || ""}|${previous?.entity || ""}`;
-    const now = `${this._config.serial || ""}|${this._config.entity || ""}`;
+    const was = previous?.serial || "";
+    const now = this._config.serial || "";
     if (previous && was !== now) {
       this._closeClip();
       this._list = null;
@@ -857,15 +856,13 @@ class EzvizVideoCard extends HTMLElement {
   _findDevice() {
     if (this._device !== undefined) return this._device;
     if (!this._devices) return null;
-    const { serial, entity } = this._config || {};
-    this._device =
-      this._devices.find((d) => (serial && d.serial === serial) || (entity && d.entity_id === entity)) ||
-      null;
+    const { serial } = this._config || {};
+    this._device = this._devices.find((d) => serial && d.serial === serial) || null;
     return this._device;
   }
 
   _entityId() {
-    return this._config?.entity || this._findDevice()?.entity_id || null;
+    return this._findDevice()?.entity_id || null;
   }
 
   _name() {

@@ -336,12 +336,16 @@ This project follows [Semantic Versioning](https://semver.org/).
   **Recordings** — instead of one long list of every option.
 
 ### Removed
+- **The video card's `entity` option.** The card is configured by **`serial`**
+  only now — the same one the visual editor lists. A card set up with `entity`
+  and no `serial` should get the camera's serial from the EZVIZ app (or the
+  card's visual editor) and use that instead.
 - **The separate EZVIZ Snapshot and EZVIZ Recordings cards.** Both are folded
   into the **EZVIZ Video** card: `capture_on_load` takes the snapshot on view,
   and the filmstrip button opens the SD-card recordings. The
   `custom:ezviz-snapshot-card` and `custom:ezviz-recordings-card` types no longer
   exist; a dashboard using one should point that card at
-  `custom:ezviz-video-card` (with `serial` or `entity`) and use
+  `custom:ezviz-video-card` (with `serial`) and use
   `capture_on_load` or the filmstrip button instead.
 
 ## [1.6.0] — 2026-11-07

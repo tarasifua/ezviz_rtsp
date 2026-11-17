@@ -99,7 +99,7 @@ after **Mushroom cards** — a rounded card, an icon tile, a status line and
 small **play/stop chips in the bottom-right corner** of the picture, plus a
 **snapshot chip** in the bottom-left that wakes the camera for a fresh picture —
 but it needs neither Mushroom nor any other frontend add-on. The card finds a
-camera by its serial (or `entity`).
+camera by its serial.
 
 A **filmstrip button next to the battery level** opens the camera's SD-card
 recordings in the same card; see [Recordings on the SD card](#recordings-on-the-sd-card).
@@ -127,7 +127,6 @@ save_recordings: true  # optional; false keeps watched clips out of media
 | Option | Default | What it does |
 |---|---|---|
 | `serial` | — | The device serial (on the label or in the EZVIZ app). The visual editor lists your cameras. |
-| `entity` | — | Use a camera entity directly instead of looking one up by serial. |
 | `title` | camera name | The heading in the card. |
 | `icon` | `mdi:video` | The icon in the tile. |
 | `auto_play` | `false` | Start a clip as soon as the card is on screen. Off (the default) shows the camera's last picture and waits for a tap, so opening a dashboard never wakes a battery camera. A clip stops as soon as the card leaves the screen. |
@@ -144,9 +143,9 @@ save_recordings: true  # optional; false keeps watched clips out of media
 | `max_height` | `360` | Height of the scrolling recordings list, in pixels. |
 | `save_recordings` | `true` | Keep the recordings you watch in the media folder. With `false`, a watched clip is fetched into a temporary folder, deleted after about two hours, and never appears under **Media**; one already saved earlier still plays from its permanent copy. |
 
-All of these — except `entity` — are also in the card's **visual editor**,
-grouped into **Camera**, **Playback**, **Picture and snapshots**, **Buttons and
-battery** and **Recordings** sections with your cameras listed. By default the card does
+All of these are also in the card's **visual editor**, grouped into **Camera**,
+**Playback**, **Picture and snapshots**, **Buttons and battery** and
+**Recordings** sections with your cameras listed. By default the card does
 nothing until you press play: it shows the camera's **last alarm picture** with
 a small Mushroom-style **play chip in the bottom-right corner**. Pressing it
 starts the live view, which runs for `max_seconds`; a **Stop** chip in the same
