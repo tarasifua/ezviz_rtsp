@@ -3,7 +3,11 @@
 All notable changes to **Ezviz Cloud with Video** (`ezviz_rtsp`) are listed here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [1.7.0] — unreleased
+## [2.0.0] — 2026-11-17
+
+**Breaking:** the separate Snapshot and Recordings cards are gone (both are modes
+of the **EZVIZ Video** card now), and the video card's `entity` option is removed
+in favour of `serial`. See **Removed** below.
 
 ### Added
 - **SD-card recordings.** The **filmstrip button next to the battery level**
@@ -545,6 +549,7 @@ battery camera can never be left streaming.
   expose no local RTSP, a bundled Mushroom-styled Lovelace card, and a
   token-guarded MPEG-TS address for go2rtc, Frigate and friends.
 
+[2.0.0]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v2.0.0
 [1.6.0]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v1.6.0
 [1.5.1]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v1.5.1
 [1.5.0]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v1.5.0
