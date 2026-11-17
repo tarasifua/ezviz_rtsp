@@ -3,17 +3,25 @@
 All notable changes to **Ezviz Cloud with Video** (`ezviz_rtsp`) are listed here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.1.0] — 2026-11-17
+
+### Added
+- **The camera's picture shape, so the card's picture box never jumps.** The
+  integration reads the shape from the picture it already fetches for the
+  camera's thumbnail (a cloud-stored last-alarm picture, so no battery is spent),
+  remembers it per camera in Home Assistant's storage
+  (`ezviz_rtsp.picture_shapes`), and hands it to the card on the **camera
+  entity** (`serial`, `picture_width`, `picture_height`) and in the
+  **`ezviz_rtsp/devices`** answer. A camera whose shape is not known yet is
+  fetched once in the background when its entities are added.
 
 ### Fixed
-- **The card opens at the right height, with no jump.** The picture box sat at
-  the 16:9 default until the camera's idle picture loaded a moment later, then
-  grew to the picture's own shape — a small but visible jump on every dashboard
-  open. The integration now reads that shape from the picture it already fetches
-  for the camera's thumbnail (a cloud-stored picture, so no battery is spent) and
-  hands it to the card on the camera entity and in the devices list; the card
-  sizes the box before the picture loads. The card also remembers the shape in
-  the browser, so even the first paint after a reload is right.
+- **The card opens at the right height, with no jump.** The picture box used to
+  sit at the 16:9 default until the camera's idle picture loaded a moment later,
+  then grow to the picture's own shape — a small but visible jump on every
+  dashboard open. The card now sizes the box before the picture loads, from the
+  shape above, and also remembers the shape in the browser, so even the first
+  paint after a reload is right.
 
 ## [2.0.0] — 2026-11-17
 
@@ -561,6 +569,7 @@ battery camera can never be left streaming.
   expose no local RTSP, a bundled Mushroom-styled Lovelace card, and a
   token-guarded MPEG-TS address for go2rtc, Frigate and friends.
 
+[2.1.0]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v2.1.0
 [2.0.0]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v2.0.0
 [1.6.0]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v1.6.0
 [1.5.1]: https://github.com/tarasifua/ezviz_rtsp/releases/tag/v1.5.1
