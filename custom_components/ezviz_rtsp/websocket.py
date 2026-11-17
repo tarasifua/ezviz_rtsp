@@ -22,6 +22,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_CODES, DATA_WS, DOMAIN
 from .live import CARD_MJPEG_TTL, card_mjpeg_path, find_stream
+from .picture import shape_for
 from .recordings import (
     DATA_RECORDINGS,
     FORMATS,
@@ -84,6 +85,7 @@ async def ws_get_devices(
         codes = entry.options.get(CONF_CODES, {})
         data = getattr(getattr(entry, "runtime_data", None), "data", None) or {}
         for serial, value in data.items():
+            shape = shape_for(hass, serial)
             devices.append(
                 {
                     "entry_id": entry.entry_id,
@@ -95,6 +97,10 @@ async def ws_get_devices(
                     "battery_level": value.get("battery_level"),
                     "battery_entity_id": _battery_entity_id(registry, serial),
                     "entity_id": registry.async_get_entity_id("camera", DOMAIN, serial),
+                    # The picture's shape, so the card sizes its box before the
+                    # picture loads instead of growing a moment later.
+                    "picture_width": shape[0] if shape else None,
+                    "picture_height": shape[1] if shape else None,
                     # The card drops this straight into an <img> for a fast start.
                     # It is a short-lived signed URL to the authenticated picture
                     # view, so it cannot be reused after it expires or the user

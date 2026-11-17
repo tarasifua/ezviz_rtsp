@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from typing import override
+from typing import Any, override
 
 import aiohttp
 import probatio as vol
@@ -48,6 +48,7 @@ from .const import (
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
 from .live import LiveStream, is_battery_camera, rtsp_entry, stream_source
+from .picture import async_remember_picture, shape_for
 from .pyezvizapi.exceptions import HTTPError, InvalidHost, PyEzvizError
 from .pyezvizapi.utils import decrypt_image
 from .recordings import FORMATS, RecordingError, async_download_latest, find_camera
@@ -277,6 +278,19 @@ class EzvizCamera(EzvizEntity, Camera):
         await super().async_added_to_hass()
         if self._use_cloud and self._live is not None:
             self._live.on_no_video = self._stop_stream_worker
+        # Learn the picture's shape once, in the background, so the card can size
+        # its box before the picture loads. The picture is cloud-stored, so this
+        # costs no battery, and it is skipped when the shape is already known.
+        if self._use_cloud and shape_for(self.hass, self._serial) is None:
+            self.hass.async_create_task(self.async_learn_picture())
+
+    async def async_learn_picture(self) -> None:
+        """Fetch the camera's last picture once to learn its shape."""
+        try:
+            if await self._async_cloud_still() is not None:
+                self.async_write_ha_state()
+        except Exception:  # noqa: BLE001 - a background nicety must not break setup
+            _LOGGER.debug("Could not learn the picture shape of %s", self._serial)
 
     async def async_will_remove_from_hass(self) -> None:
         """Drop the no-video hook."""
@@ -297,6 +311,19 @@ class EzvizCamera(EzvizEntity, Camera):
     def is_on(self) -> bool:
         """Return true if on."""
         return bool(self.data.get("status"))
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The serial and the picture's shape, so the card can size its box.
+
+        The card finds the camera by its serial and reads the shape before its
+        picture loads, so the box is the right height from the first paint.
+        """
+        attributes: dict[str, Any] = {"serial": self._serial}
+        if (shape := shape_for(self.hass, self._serial)) is not None:
+            attributes["picture_width"], attributes["picture_height"] = shape
+        return attributes
 
     @property
     @override
@@ -368,6 +395,9 @@ class EzvizCamera(EzvizEntity, Camera):
                 content = decrypt_image(content, code)
             except PyEzvizError as err:
                 _LOGGER.debug("Could not decrypt the alarm picture of %s: %s", self._serial, err)
+        # Learn the picture's shape from the bytes, so the card can size its box
+        # before this picture loads (see picture.py).
+        await async_remember_picture(self.hass, self._serial, content)
         return content
 
     @override

@@ -59,6 +59,32 @@ sleep.
 
 ---
 
+## The card's picture shape
+
+The card sizes its picture box to the camera's own shape (a doorbell's 4:3 fills
+the card's width instead of leaving black bands). It cannot know that shape until
+the picture has loaded, so the box used to sit at the default 16:9 and grow a
+moment later — a small jump the reader saw on every dashboard open.
+
+The integration reads the shape from the picture it already fetches for the
+camera's thumbnail: the cloud-stored last-alarm picture, so no battery is spent.
+`picture.py` reads the JPEG header's frame size (`jpeg_size`), remembers it per
+serial (in Home Assistant's storage, `ezviz_rtsp.picture_shapes`) and hands it
+over:
+
+- on the **camera entity** as `serial`, `picture_width` and `picture_height`
+  attributes, and
+- in the **`ezviz_rtsp/devices`** answer as `picture_width` / `picture_height`.
+
+The card reads the shape before the picture loads, so the box is the right height
+from the first paint. It also remembers the shape in the browser
+(`localStorage`), which covers the first paint after a reload even before the
+entity state is read. A camera whose shape is not known yet is fetched once in
+the background when its entities are added, so the shape is usually there before
+a dashboard is opened.
+
+---
+
 ## How SD-card playback works
 
 The list comes from the cloud's SD index (`/v3/streaming/v2/records`, the

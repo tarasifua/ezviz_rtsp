@@ -16,6 +16,7 @@ from propcache.api import cached_property
 from .const import DOMAIN, SIGNAL_PICTURE_CAPTURED
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .entity import EzvizEntity
+from .picture import async_remember_picture
 from .pyezvizapi.exceptions import PyEzvizError
 from .pyezvizapi.utils import decrypt_image
 
@@ -107,6 +108,9 @@ class EzvizLastMotion(EzvizEntity, ImageEntity):
                         self.entity_id,
                     )
                     image_data = response.content
+            # Learn the picture's shape from the bytes, so the card can size its
+            # box before this picture loads (see picture.py).
+            await async_remember_picture(self.hass, self._serial, image_data)
             return Image(
                 content=image_data,
                 content_type="image/jpeg",  # Actually returns binary/octet-stream

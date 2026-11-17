@@ -706,9 +706,6 @@ class EzvizVideoCard extends HTMLElement {
       this._mediaRatio = null;
       this._ratioProbe = null;
     }
-    // A remembered shape means the box is right from the first paint, instead
-    // of growing a moment later when the poster loads.
-    if (!this._mediaRatio) this._mediaRatio = readStoredRatio(this._config.serial);
     this._stop();
     this._state = "idle";
     this._message = "";
@@ -893,6 +890,42 @@ class EzvizVideoCard extends HTMLElement {
 
   _entityId() {
     return this._findDevice()?.entity_id || null;
+  }
+
+  // The camera's picture shape, when it is already known: the integration reads
+  // it from the picture it fetches for the thumbnail and puts it on the camera
+  // entity (and in the devices list), and this browser remembers it too. With
+  // it the box is the right height from the first paint, instead of growing
+  // when the poster finally loads.
+  _knownRatio() {
+    const serial = this._config?.serial;
+    if (!serial) return null;
+    return (
+      this._shapeFromHass(serial) ||
+      this._shapeFromDevices(serial) ||
+      readStoredRatio(serial)
+    );
+  }
+
+  _shapeFromHass(serial) {
+    const states = this._hass?.states;
+    if (!states) return null;
+    for (const id of Object.keys(states)) {
+      if (!id.startsWith("camera.")) continue;
+      const attributes = states[id]?.attributes;
+      if (attributes?.serial !== serial) continue;
+      const width = Number(attributes.picture_width);
+      const height = Number(attributes.picture_height);
+      return width > 0 && height > 0 ? `${width} / ${height}` : null;
+    }
+    return null;
+  }
+
+  _shapeFromDevices(serial) {
+    const device = (this._devices || []).find((d) => d.serial === serial);
+    const width = Number(device?.picture_width);
+    const height = Number(device?.picture_height);
+    return width > 0 && height > 0 ? `${width} / ${height}` : null;
   }
 
   _name() {
@@ -1166,6 +1199,9 @@ class EzvizVideoCard extends HTMLElement {
     // Media
     const media = document.createElement("div");
     media.className = "media";
+    // Take the camera's shape before its picture loads, when the integration (or
+    // an earlier visit) already knows it, so nothing grows a moment later.
+    if (!this._mediaRatio) this._mediaRatio = this._knownRatio();
     // A card rebuilt after the shape was learned starts at the right height, so
     // switching a day (or live and the recordings) never resizes the picture.
     if (this._mediaRatio) media.style.aspectRatio = this._mediaRatio;

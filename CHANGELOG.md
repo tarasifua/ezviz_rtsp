@@ -6,11 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
-- **The card opens at the right height.** The picture box sat at the 16:9 default
-  until the camera's idle picture loaded a moment later, then grew to the
-  picture's own shape — a small but visible jump on every dashboard open. The
-  card now remembers each camera's shape in the browser and starts the box at
-  it, so nothing resizes after the first visit.
+- **The card opens at the right height, with no jump.** The picture box sat at
+  the 16:9 default until the camera's idle picture loaded a moment later, then
+  grew to the picture's own shape — a small but visible jump on every dashboard
+  open. The integration now reads that shape from the picture it already fetches
+  for the camera's thumbnail (a cloud-stored picture, so no battery is spent) and
+  hands it to the card on the camera entity and in the devices list; the card
+  sizes the box before the picture loads. The card also remembers the shape in
+  the browser, so even the first paint after a reload is right.
 
 ## [2.0.0] — 2026-11-17
 

@@ -33,6 +33,7 @@ from .const import (
 )
 from .coordinator import EzvizConfigEntry, EzvizDataUpdateCoordinator
 from .live import async_close_live_streams, async_setup_live_streams
+from .picture import async_load_shapes
 from .pyezvizapi.client import EzvizClient
 from .pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
@@ -154,6 +155,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: EzvizConfigEntry) -> boo
         await _async_register_card(hass)
         # Sweep the downloaded clips now, and once a day while we run.
         await async_setup_recordings(hass)
+        # Remember each camera's picture shape, so the card can size its box
+        # before the picture loads.
+        await async_load_shapes(hass)
 
     # Check EZVIZ cloud account entity is present, reload
     # cloud account entities for camera entity change
