@@ -2,5 +2,7 @@
   "name": "Ezviz Cloud with Video",
   "render_readme": true,
   "homeassistant": "2026.10.0",
-  "content_in_root": false
+  "content_in_root": false,
+  "zip_release": true,
+  "filename": "ezviz_rtsp.zip"
 }
