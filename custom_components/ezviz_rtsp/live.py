@@ -30,6 +30,7 @@ from .cloud_stream import (
     EzvizStreamError,
     LiveSource,
     PackSplitter,
+    RtpToPs,
     async_iter_payloads,
     decrypt_packs,
 )
@@ -121,6 +122,8 @@ class LiveStream:
         self._cooldown_until = 0.0
         # Whether the current open has handed a keyframe to its readers.
         self._video = False
+        # Whether the copy path may carry audio (an RTP relay with encrypted AAC).
+        self.audio_copy = False
         # Whether the open is waiting for a clip download or an SD read to end
         # before it may wake the camera. The card shows this in its status.
         self.waiting = False
@@ -295,14 +298,36 @@ class LiveStream:
             # A stored code only decrypts video of an encrypted camera; applying it
             # to a clear stream would garble it.
             code = self._code() if self.encrypted else None
-            # The stream opens with a group of pictures that doesn't decode; with a
-            # code, decrypting it garbles it further. Readers start at the next one.
-            packs = PackSplitter(skip_first_group=bool(code))
+            # Some cameras relay RTP rather than MPEG-PS (the CP3 Pro, for one).
+            # The transport is decided from the first body that arrives, because
+            # the EZVIZ VTM stream can open with a service packet.
+            packs: PackSplitter | RtpToPs | None = None
             async for data in async_iter_payloads(self._hass, source):
+                if packs is None:
+                    from .pyezvizapi.streaming.cloud.protocol import (
+                        StreamTransport,
+                        detect_transport,
+                    )
+
+                    rtp = detect_transport(data) == StreamTransport.RTP
+                    # The first group of a clear MPEG-PS stream doesn't decode and
+                    # decrypting it garbles it further; RTP starts at a keyframe by
+                    # itself, so readers wait for the first one there.
+                    packs = (
+                        RtpToPs(code)
+                        if rtp
+                        else PackSplitter(skip_first_group=bool(code))
+                    )
+                    self.audio_copy = rtp and code is not None
+                    _LOGGER.info(
+                        "Live view of %s reads %s from the cloud",
+                        self.serial,
+                        "RTP" if rtp else "MPEG-PS",
+                    )
                 if not (batch := packs.feed(data)):
                     continue
                 self.codec = packs.codec
-                if code:
+                if code and not packs.decrypts:
                     clear = await self._hass.async_add_executor_job(
                         decrypt_packs, [pack for pack, _ in batch], code, packs.codec
                     )
@@ -448,6 +473,9 @@ class LiveStreamView(HomeAssistantView):
                     "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "30",
                     "-map", "0:a:0?", "-c:a", "aac", "-b:a", "64k",
                 )
+            elif stream.audio_copy is True:
+                # An RTP relay also carries AAC: copy it next to the video.
+                codec = ("-map", "0:v:0", "-map", "0:a:0?", "-c", "copy")
             else:
                 codec = ("-map", "0:v:0", "-c", "copy")
             return await _pipe_frames(

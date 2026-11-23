@@ -14,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from custom_components.ezviz_rtsp import live
 from custom_components.ezviz_rtsp.cloud_stream import (
     PackSplitter,
+    RtpToPs,
     decrypt_packs,
 )
 from custom_components.ezviz_rtsp.const import DOMAIN, SIGNAL_PICTURE_CAPTURED
@@ -153,6 +154,82 @@ def test_decrypt_packs_decrypts_together_and_cuts_back(monkeypatch) -> None:
     assert decrypt_packs([b"ab", b"cde"], "KEY", "h264") == [b"AB", b"CDE"]
     assert calls == [(b"abcde", "KEY", "h264")]
     assert decrypt_packs([b"ab"], None, "hevc") == [b"ab"]
+
+
+# --- RTP (cameras that relay RTP instead of MPEG-PS) --------------------------
+
+
+def _rtp(payload: bytes, *, pt: int = 96, seq: int = 1, ts: int = 90000) -> bytes:
+    """One RTP v2 packet, no extension, like the CP3 Pro's relay."""
+    header = bytes([0x80, pt]) + seq.to_bytes(2, "big") + ts.to_bytes(4, "big")
+    return header + (0x55667788).to_bytes(4, "big") + payload
+
+
+def _hevc(nal_type: int, body: bytes = b"\xaa" * 40) -> bytes:
+    """One single-NAL HEVC NAL unit with a clear two-byte header."""
+    return bytes([(nal_type << 1) & 0x7E, 0x01]) + body
+
+
+def test_rtp_becomes_mpegps_and_flags_the_keyframe() -> None:
+    rtp = RtpToPs(None)
+    out = rtp.feed(_rtp(_hevc(19)))  # IDR_W_RADL
+    assert out
+    pack = out[0][0]
+    assert pack.startswith(b"\x00\x00\x01\xba"), "a pack header opens each pack"
+    assert b"\x00\x00\x01\xbc" in pack, "the pack carries a program stream map"
+    assert out[0][1] is True, "an IDR NAL holds a keyframe"
+    assert rtp.codec == "hevc"
+    assert rtp.decrypts is True and PackSplitter(skip_first_group=False).decrypts is False
+
+
+def test_rtp_flags_only_keyframes() -> None:
+    rtp = RtpToPs(None)
+    assert rtp.feed(_rtp(_hevc(19)))[0][1] is True
+    assert rtp.feed(_rtp(_hevc(1), seq=2, ts=93000))[0][1] is False  # TRAIL_R
+
+
+def test_rtp_ignores_a_body_that_is_not_rtp() -> None:
+    assert RtpToPs(None).feed(b"\x00\x00\x01\xbakeyframe") == []
+
+
+async def test_a_rtp_relay_plays_through_the_live_stream(upstream) -> None:
+    stream = _stream()
+    frames = stream.frames()
+    pending = asyncio.ensure_future(anext(frames))
+    await asyncio.sleep(0)
+    upstream.queue.put_nowait(_rtp(_hevc(19)))
+    pack = await pending
+    assert pack.startswith(b"\x00\x00\x01\xba")
+    assert stream.codec == "hevc"
+    assert stream.audio_copy is False, "a clear RTP stream declares no audio"
+    await frames.aclose()
+    await stream.async_close()
+
+
+async def test_an_encrypted_rtp_relay_announces_audio(upstream) -> None:
+    stream = _stream("SECRET")
+    frames = stream.frames()
+    pending = asyncio.ensure_future(anext(frames))
+    await asyncio.sleep(0)
+    upstream.queue.put_nowait(_rtp(_hevc(19)))
+    assert (await pending).startswith(b"\x00\x00\x01\xba")
+    assert stream.audio_copy is True, "an encrypted RTP relay may carry AAC"
+    await frames.aclose()
+    await stream.async_close()
+
+
+async def test_an_rtp_relay_is_decrypted_once(upstream) -> None:
+    # RtpToPs decrypts each NAL itself; decrypting the packs again would garble.
+    stream = _stream("SECRET")
+    with patch.object(live, "decrypt_packs") as decrypt:
+        frames = stream.frames()
+        pending = asyncio.ensure_future(anext(frames))
+        await asyncio.sleep(0)
+        upstream.queue.put_nowait(_rtp(_hevc(19)))
+        assert (await pending).startswith(b"\x00\x00\x01\xba")
+        await frames.aclose()
+    decrypt.assert_not_called()
+    await stream.async_close()
 
 
 # --- LiveStream ---------------------------------------------------------------
@@ -515,6 +592,20 @@ async def test_view_transcodes_to_h264_when_asked() -> None:
     _, _, spawn = await _serve(MagicMock(token="tok", internal_token="tok", frames=frames, transcode=True), "tok")
     args = spawn.await_args.args
     assert args[args.index("-c:v") + 1] == "libx264"
+
+
+async def test_view_copies_the_audio_of_an_rtp_relay() -> None:
+    async def frames():
+        yield b"key"
+
+    stream = MagicMock(
+        token="tok", internal_token="tok", frames=frames, transcode=False, audio_copy=True
+    )
+    _, _, spawn = await _serve(stream, "tok")
+    args = spawn.await_args.args
+    assert args.count("-map") == 2
+    assert "0:a:0?" in args
+    assert args[args.index("-c") + 1] == "copy"
 
 
 async def test_view_hides_unknown_cameras_and_bad_tokens() -> None:

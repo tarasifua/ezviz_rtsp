@@ -3,9 +3,14 @@
 Battery cameras (and some others) sleep and have no RTSP server, so the
 integration's usual ``rtsp://`` source can't play them. The EZVIZ mobile app
 falls back to the cloud relay: it opens a VTM session, the cloud wakes the
-camera and relays its MPEG-PS. This module does the same through ``pyezvizapi``,
-cuts the stream into frames and decrypts the NAL bodies when video encryption is
-on (the camera's verification code is the AES key).
+camera and relays its video. This module does the same through ``pyezvizapi``,
+cuts the stream into MPEG-PS packs and decrypts the NAL bodies when video
+encryption is on (the camera's verification code is the AES key).
+
+Most cameras relay MPEG-PS (``PackSplitter``). Some relays RTP instead (the CP3
+Pro, for one) with HEVC video and AAC audio; ``RtpToPs`` depacketizes that with
+the RTP helpers the vendored ``pyezvizapi`` already carries and muxes it back
+into MPEG-PS, so the rest of the live view stays unchanged.
 
 The blocking socket work (``LiveSource``) must run in the executor or a thread;
 ``async_iter_payloads`` bridges it to asyncio.
@@ -31,6 +36,9 @@ _IMKH_HEADER = 40  # EZVIZ prefixes the MPEG-PS stream with a 40-byte "IMKH" hea
 # MPEG-PS stream types in the program stream map.
 _CODECS = {0x1B: "h264", 0x24: "hevc"}
 _DEFAULT_CODEC = "hevc"
+# RTP video NAL types that can open a decodable group of pictures.
+_KEYFRAMES = {"hevc": frozenset({16, 17, 18, 19, 20, 21}), "h264": frozenset({5})}
+_ANNEX_B = b"\x00\x00\x00\x01"
 
 
 class LiveSource:
@@ -159,6 +167,9 @@ class PackSplitter:
         self._keyframe = False
         self.codec = _DEFAULT_CODEC
 
+    #: MPEG-PS packs are decrypted by the live view, not here.
+    decrypts = False
+
     def feed(self, data: bytes) -> list[tuple[bytes, bool]]:
         """Add ``data``; return the packs it completed, each with whether it is a keyframe."""
         self._buf += data
@@ -208,6 +219,161 @@ class PackSplitter:
         if self._skip and self._groups < 2:
             return
         done.append((pack, self._keyframe))
+
+
+class RtpToPs:
+    """Cuts an RTP relay into MPEG-PS packs, one frame each, like ``PackSplitter``.
+
+    A few cameras (the CP3 Pro, for one) relay RTP instead of MPEG-PS: HEVC
+    video, AAC audio and Hikvision metadata packets, with the video NAL body
+    encrypted by the camera's verification code. The vendored ``pyezvizapi``
+    already carries every piece this needs — the depacketizer, the decryption
+    and an incremental MPEG-PS muxer — so this class only wires them together
+    and keeps the interface the live view expects.
+
+    ``feed`` takes one VTM packet body, which is one RTP packet. Decryption
+    happens here (the NAL body, not the whole stream), so the live view must not
+    decrypt again; that is what ``decrypts`` tells it.
+    """
+
+    #: The stream is already decrypted here.
+    decrypts = True
+
+    def __init__(self, code: str | None) -> None:
+        self._code = code
+        self._loaded = False
+        self.codec = _DEFAULT_CODEC
+
+    def feed(self, data: bytes) -> list[tuple[bytes, bool]]:
+        """Add one RTP packet; return the packs it completed, each with its keyframe flag."""
+        if not self._loaded:
+            self._load()
+        try:
+            packet = self._parse(data, idmx=True)
+        except self._errors:
+            return []
+        try:
+            self._route.absorb(packet)
+        except self._errors as err:
+            # A descriptor that contradicts an already-dispatched route must not
+            # stop a live view; keep routing the media with what we already know.
+            _LOGGER.debug("Ignoring an inconsistent RTP route: %s", err)
+        kind = self._route.media_kind(packet)
+        if kind == "video":
+            return self._video(packet)
+        if kind == "audio":
+            return self._audio(packet)
+        return []
+
+    def _load(self) -> None:
+        from .pyezvizapi.exceptions import PyEzvizError
+        from .pyezvizapi.streaming.media.rtp import (
+            DEFAULT_AAC_PAYLOAD_TYPES,
+            DEFAULT_VIDEO_PAYLOAD_TYPES,
+            RtpRouteProfile,
+            RtpVideoDepacketizer,
+            decrypt_idmx_aac_packets,
+            detect_rtp_video_codec,
+            parse_rtp_packet,
+            rtp_codec_payload_types,
+        )
+        from .pyezvizapi.streaming.media.rtp_timing import NativeRtpPsMuxer
+
+        self._errors = PyEzvizError
+        self._parse = parse_rtp_packet
+        self._protocol = None
+        self._route = RtpRouteProfile()
+        self._depacketizer = RtpVideoDepacketizer
+        self._muxer = None
+        self._muxer_cls = NativeRtpPsMuxer
+        self._detect = detect_rtp_video_codec
+        self._aac = decrypt_idmx_aac_packets
+        self._codec_types = rtp_codec_payload_types
+        self._video_types = DEFAULT_VIDEO_PAYLOAD_TYPES
+        self._aac_types = DEFAULT_AAC_PAYLOAD_TYPES
+        self._loaded = True
+
+    def _video(self, packet: Any) -> list[tuple[bytes, bool]]:
+        if self._protocol is None:
+            self.codec = self._video_codec(packet)
+            self._protocol = self._depacketizer(
+                self.codec, allow_ezviz_headerless_hevc_fu=True
+            )
+            # Audio is only decrypted when the camera encrypts; declare it in the
+            # program stream map only then, or an empty track would be advertised.
+            self._muxer = self._muxer_cls(
+                self.codec, audio=bool(self._code), allow_audio_clock_jitter=True
+            )
+        if packet.payload_type not in self._types(self.codec, self._video_types):
+            return []
+        self._route.mark_media(packet, absorb=False)
+        done: list[tuple[bytes, bool]] = []
+        for nal in self._protocol.push(packet):
+            if not nal:
+                continue
+            if self._code:
+                nal = self._decrypt_nal(nal)
+            keyframe = _is_keyframe(nal, self.codec)
+            done.extend((pack, keyframe) for pack in self._muxer.video(packet.timestamp, nal))
+        return done
+
+    def _audio(self, packet: Any) -> list[tuple[bytes, bool]]:
+        if self._code is None or self._muxer is None:
+            return []
+        types = self._types("aac", self._aac_types)
+        if packet.payload_type not in types:
+            return []
+        audio = self._aac(
+            (packet,),
+            self._code,
+            audio_metadata=self._route.audio_metadata,
+            audio_payload_types=types,
+            require_contiguous=False,
+            allow_timestamp_jitter=True,
+        )
+        if audio is None:
+            return []
+        self._route.mark_media(packet, absorb=False)
+        return [(pack, False) for pack in self._muxer.audio(packet.timestamp, audio)]
+
+    def _types(self, codec: str, fallback: frozenset[int]) -> frozenset[int]:
+        return self._codec_types(
+            self._route.descriptors, codec, fallback_payload_types=fallback
+        )
+
+    def _video_codec(self, packet: Any) -> str:
+        try:
+            codec = self._detect(
+                [packet],
+                stream_descriptors=self._route.descriptors,
+                allow_ezviz_headerless_hevc_fu=True,
+            )
+        except self._errors:
+            return _DEFAULT_CODEC
+        return "h264" if codec == "h264" else "hevc"
+
+    def _decrypt_nal(self, nal: bytes) -> bytes:
+        """Decrypt the reassembled NAL with the verification code.
+
+        Only the body is encrypted, in whole 16-byte blocks; the codec header
+        stays clear. pyezvizapi wants the NAL as a PES payload, so it is wrapped
+        and unwrapped around the call.
+        """
+        from .pyezvizapi.streaming.cloud.protocol import decrypt_hikvision_ps_video
+
+        header_size = 1 if self.codec == "h264" else 2
+        pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + _ANNEX_B + nal
+        clear = decrypt_hikvision_ps_video(pes, self._code, nalu_header_size=header_size)
+        return clear[9:][len(_ANNEX_B) :]
+
+
+def _is_keyframe(nal: bytes, codec: str) -> bool:
+    """Whether a clear NAL header marks a keyframe (an IDR or the groups before one)."""
+    if not nal:
+        return False
+    if codec == "h264":
+        return (nal[0] & 0x1F) in _KEYFRAMES["h264"]
+    return ((nal[0] >> 1) & 0x3F) in _KEYFRAMES["hevc"]
 
 
 def decrypt_packs(packs: list[bytes], code: str | None, codec: str) -> list[bytes]:
