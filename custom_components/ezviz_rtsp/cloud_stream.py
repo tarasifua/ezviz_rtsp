@@ -243,6 +243,12 @@ class RtpToPs:
         self._code = code
         self._loaded = False
         self.codec = _DEFAULT_CODEC
+        # TEMPORARY diagnostics for issue #3 (CP3 Pro payload type); remove with
+        # ``_diagnose`` once the camera's route is understood.
+        self._diag_packets = 0
+        self._diag_types: dict[int, int] = {}
+        self._diag_descriptors: tuple[Any, ...] = ()
+        self._diag_unknown: set[int] = set()
 
     def feed(self, data: bytes) -> list[tuple[bytes, bool]]:
         """Add one RTP packet; return the packs it completed, each with its keyframe flag."""
@@ -259,11 +265,54 @@ class RtpToPs:
             # stop a live view; keep routing the media with what we already know.
             _LOGGER.debug("Ignoring an inconsistent RTP route: %s", err)
         kind = self._route.media_kind(packet)
+        self._diagnose(packet, data, kind)
         if kind == "video":
             return self._video(packet)
         if kind == "audio":
             return self._audio(packet)
         return []
+
+    def _diagnose(self, packet: Any, data: bytes, kind: str) -> None:
+        """TEMPORARY: log routing details for issue #3 (CP3 Pro payload type).
+
+        The CP3 Pro advertises its video under payload type 15 in the info packet
+        while sending it as 96. These lines show the raw descriptor bytes and how
+        the route classifies each packet, so the fix can target the real cause.
+        """
+        self._diag_packets += 1
+        self._diag_types[packet.payload_type] = self._diag_types.get(packet.payload_type, 0) + 1
+        descriptors = self._route.descriptors
+        if descriptors != self._diag_descriptors:
+            _LOGGER.info("RTP diagnostics: descriptors %s", descriptors)
+            self._diag_descriptors = descriptors
+        if self._diag_packets <= 12:
+            _LOGGER.info(
+                "RTP diagnostics: packet %d pt=%d seq=%d ts=%d len=%d kind=%s ext=%s",
+                self._diag_packets,
+                packet.payload_type,
+                packet.sequence,
+                packet.timestamp,
+                len(packet.payload),
+                kind,
+                data[:96].hex(" ") or "-",
+            )
+        if (
+            kind == "unknown"
+            and packet.payload_type in self._video_types
+            and packet.payload_type not in self._diag_unknown
+        ):
+            self._diag_unknown.add(packet.payload_type)
+            _LOGGER.info(
+                "RTP diagnostics: pt %d looks like video but is routed as unknown; video types %s",
+                packet.payload_type,
+                sorted(self._types(self.codec, self._video_types)),
+            )
+        if self._diag_packets in {12, 1000} or self._diag_packets % 5000 == 0:
+            _LOGGER.info(
+                "RTP diagnostics: %d packets, payload types %s",
+                self._diag_packets,
+                self._diag_types,
+            )
 
     def _load(self) -> None:
         from .pyezvizapi.exceptions import PyEzvizError
