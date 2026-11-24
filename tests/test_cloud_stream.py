@@ -159,10 +159,19 @@ def test_decrypt_packs_decrypts_together_and_cuts_back(monkeypatch) -> None:
 # --- RTP (cameras that relay RTP instead of MPEG-PS) --------------------------
 
 
-def _rtp(payload: bytes, *, pt: int = 96, seq: int = 1, ts: int = 90000) -> bytes:
-    """One RTP v2 packet, no extension, like the CP3 Pro's relay."""
-    header = bytes([0x80, pt]) + seq.to_bytes(2, "big") + ts.to_bytes(4, "big")
-    return header + (0x55667788).to_bytes(4, "big") + payload
+def _rtp(
+    payload: bytes, *, pt: int = 96, seq: int = 1, ts: int = 90000, ext: bytes = b""
+) -> bytes:
+    """One RTP v2 packet, like the CP3 Pro's relay, optionally with a descriptor."""
+    header = bytes([0x80 | (0x10 if ext else 0), pt])
+    header += seq.to_bytes(2, "big") + ts.to_bytes(4, "big")
+    header += (0x55667788).to_bytes(4, "big")
+    if ext:
+        pad = (-len(ext)) % 4
+        header += (0x4000).to_bytes(2, "big")
+        header += ((len(ext) + pad) // 4).to_bytes(2, "big")
+        header += ext + b"\x00" * pad
+    return header + payload
 
 
 def _hevc(nal_type: int, body: bytes = b"\xaa" * 40) -> bytes:
@@ -190,6 +199,17 @@ def test_rtp_flags_only_keyframes() -> None:
 
 def test_rtp_ignores_a_body_that_is_not_rtp() -> None:
     assert RtpToPs(None).feed(b"\x00\x00\x01\xbakeyframe") == []
+
+
+def test_rtp_plays_when_the_info_packet_names_another_payload_type() -> None:
+    # The CP3 Pro info packet announces payload type 15 for its HEVC video but
+    # sends it as 96; the well-known type must still reach the muxer.
+    rtp = RtpToPs(None)
+    info = _rtp(b"", pt=112, ext=bytes([0x45, 0x02, 0x24, 0x0F]))
+    assert rtp.feed(info) == []
+    out = rtp.feed(_rtp(_hevc(19), seq=2))
+    assert out and out[0][1] is True, "the IDR is still routed and flagged"
+    assert rtp.codec == "hevc"
 
 
 async def test_a_rtp_relay_plays_through_the_live_stream(upstream) -> None:

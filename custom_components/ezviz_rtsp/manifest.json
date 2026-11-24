@@ -15,5 +15,5 @@
     "tzdata>=2024.1",
     "xmltodict>=0.13"
   ],
-  "version": "2.2.0b2"
+  "version": "2.2.0b3"
 }

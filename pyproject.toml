@@ -1,6 +1,6 @@
 [project]
 name = "ezviz-rtsp"
-version = "2.2.0b2"
+version = "2.2.0b3"
 description = "Home Assistant integration for live view of EZVIZ cameras through the EZVIZ cloud, including battery cameras without RTSP"
 readme = "README.md"
 requires-python = ">=3.14"

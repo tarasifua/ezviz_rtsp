@@ -266,6 +266,11 @@ class RtpToPs:
             _LOGGER.debug("Ignoring an inconsistent RTP route: %s", err)
         kind = self._route.media_kind(packet)
         self._diagnose(packet, data, kind)
+        if kind == "unknown" and packet.payload_type in self._video_types:
+            # The CP3 Pro info packet advertises payload type 15 for the video,
+            # but the camera sends it as payload type 96. Trust the well-known
+            # type when the route cannot classify the packet.
+            kind = "video"
         if kind == "video":
             return self._video(packet)
         if kind == "audio":
@@ -386,8 +391,14 @@ class RtpToPs:
         return [(pack, False) for pack in self._muxer.audio(packet.timestamp, audio)]
 
     def _types(self, codec: str, fallback: frozenset[int]) -> frozenset[int]:
-        return self._codec_types(
-            self._route.descriptors, codec, fallback_payload_types=fallback
+        # The descriptor route wins for its own payload types, but a camera may
+        # announce a type it never sends (the CP3 Pro announces 15 for PT 96).
+        # Keep the well-known types so those packets still reach the consumer.
+        return (
+            self._codec_types(
+                self._route.descriptors, codec, fallback_payload_types=fallback
+            )
+            | fallback
         )
 
     def _video_codec(self, packet: Any) -> str:
